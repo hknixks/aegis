@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DashboardState, Mode, StartRunMode } from "@/lib/types";
 import { AegisApiError, pollRun, startRun } from "@/lib/api";
+import { AppNav } from "./AppNav";
 import { ModeToggle } from "./ModeToggle";
 import { StatusHeader } from "./StatusHeader";
 import { RiskPanel } from "./RiskPanel";
@@ -12,6 +13,7 @@ import { ExecutionPanel } from "./ExecutionPanel";
 import { VerificationPanel } from "./VerificationPanel";
 import { AuditTimeline } from "./AuditTimeline";
 import { RecoveryVisualization } from "./RecoveryVisualization";
+import { ConfigPanel } from "./ConfigPanel";
 import { ErrorBanner } from "./ErrorBanner";
 
 // How often the dashboard polls GET /api/runs/{run_id} while a run is
@@ -131,7 +133,9 @@ export function Dashboard() {
   };
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
+    <>
+      <AppNav state={state} />
+      <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xl text-sm text-console-muted">
           Aegis does not simply choose the financially best action — it chooses the best action
@@ -205,17 +209,24 @@ export function Dashboard() {
             </div>
           ) : (
             <>
-              <RiskPanel position={state.position} />
+              <div id="risk-overview">
+                <RiskPanel position={state.position} />
+              </div>
               <CandidateTable candidates={state.candidates} />
               <RecoveryVisualization steps={state.recovery_steps} />
               <ExplanationPanel explanation={state.explanation} />
               <ExecutionPanel execution={state.execution} />
               <VerificationPanel verification={state.verification} />
-              <AuditTimeline events={state.audit_timeline} />
+              <div id="audit-timeline">
+                <AuditTimeline events={state.audit_timeline} />
+              </div>
             </>
           )}
         </>
       )}
-    </div>
+
+      <ConfigPanel state={state} />
+      </div>
+    </>
   );
 }
