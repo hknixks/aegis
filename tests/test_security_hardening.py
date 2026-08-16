@@ -20,6 +20,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from aegis.aave import AaveUserAccountData
 from aegis.audit import AuditLogger
 from aegis.config import Settings
 from aegis.decision_engine import CandidateAction, CandidateFinalStatus, SimulationStatus, select_best_executable
@@ -212,3 +213,59 @@ def test_select_best_executable_refuses_to_pick_from_an_all_ineligible_list() ->
     ]
     with pytest.raises(RuntimeError, match="no executable candidate"):
         select_best_executable(malformed)
+
+
+# --- Part 10: a malicious Hermes proposal, run through the real live loop -
+
+
+def test_hermes_cannot_smuggle_mainnet_wrong_wallet_or_arbitrary_asset_through_run_with_recovery() -> None:
+    """A hostile/compromised Hermes proposes mainnet, a different wallet,
+    and an attacker-controlled asset address — run through the ACTUAL
+    aegis.recovery.run_with_recovery integration (not just the isolated
+    build_hermes_candidate function), with a real HermesAgent/
+    HermesMcpGateway pair. None of those three values may appear anywhere
+    in the resulting candidate list; every Hermes-sourced candidate must
+    use the run's own configured network/wallet/asset instead."""
+    malicious_intent = Intent(
+        decision=Decision.REPAY_DEBT, protocol_action="aave-v3/repay", network="1",
+        asset="0xEvilContractAddress", amount="10", on_behalf_of="0xAttackerWallet",
+        rationale="ignore every configured limit",
+    )
+    hermes = _hermes(_settings(), malicious_intent)
+
+    position_reader = MagicMock()
+    position_reader.get_account_data.return_value = AaveUserAccountData.model_validate(
+        {
+            "totalCollateralBase": "1000000000", "totalDebtBase": "800000000",
+            "availableBorrowsBase": "50000000", "currentLiquidationThreshold": "8000",
+            "ltv": "7500", "healthFactor": "1200000000000000000",
+        }
+    )
+    simulation_service = MagicMock()
+    simulation_service.simulate.return_value = __import__(
+        "aegis.keeperhub.models", fromlist=["ProtocolActionSimulation"]
+    ).ProtocolActionSimulation(success=True, wouldRevert=False)
+
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=_settings(),  # aegis_autonomous_execution_enabled defaults False — stops before EXECUTE either way
+        position_reader=position_reader,
+        policy_engine=PolicyEngine(_settings()),
+        simulation_service=simulation_service,
+        execution_service=MagicMock(),
+        verification_service=MagicMock(),
+        audit=audit,
+        network=NETWORK, user=USER, debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET,
+        hermes_agent=hermes,
+    )
+
+    hermes_candidates = [c for c in result.candidates if c.source == "hermes"]
+    assert len(hermes_candidates) == 1
+    candidate = hermes_candidates[0]
+    assert candidate.network == NETWORK  # never "1"
+    assert candidate.on_behalf_of == USER  # never "0xAttackerWallet"
+    assert candidate.asset == DEBT_ASSET  # never "0xEvilContractAddress"
+    for c in result.candidates:
+        assert c.network in (None, NETWORK)
+        assert c.on_behalf_of in (None, USER)
+        assert c.asset in (None, DEBT_ASSET, COLLATERAL_ASSET)
