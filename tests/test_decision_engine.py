@@ -256,7 +256,7 @@ def test_unsupported_action_eliminated_other_candidate_selected() -> None:
         {
             "contractAddress": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27",
             "chainId": NETWORK,
-            "functionName": "supply",
+            "functionName": "supply(address,uint256,address,uint16)",
             "functionArgs": f'["{COLLATERAL_ASSET}", "{supply_amount}", "{USER}", "0"]',
         },
     )

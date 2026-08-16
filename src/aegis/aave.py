@@ -125,12 +125,17 @@ def build_protocol_action_params(intent: Intent) -> dict[str, str]:
     # IPool.repay(address asset, uint256 amount, uint256 interestRateMode,
     # address onBehalfOf) / IPool.supply(address asset, uint256 amount,
     # address onBehalfOf, uint16 referralCode) — exact positional order
-    # from Aave V3's IPool interface.
+    # from Aave V3's IPool interface. Full signatures, not just the bare
+    # name: this Pool contract also exposes a packed-calldata overload
+    # (repay(bytes32) / supply(bytes32)) for gas-optimized callers, so
+    # "repay"/"supply" alone is ambiguous — confirmed directly against
+    # the real API (KeeperHub's ABI resolution rejects the bare name with
+    # "ambiguous function description"). Never send just the bare name.
     if intent.decision is Decision.REPAY_DEBT:
-        function_name = "repay"
+        function_name = "repay(address,uint256,uint256,address)"
         function_args = [intent.asset, str(intent.amount), _VARIABLE_RATE_MODE, intent.on_behalf_of]
     else:
-        function_name = "supply"
+        function_name = "supply(address,uint256,address,uint16)"
         function_args = [intent.asset, str(intent.amount), intent.on_behalf_of, _DEFAULT_REFERRAL_CODE]
 
     return {

@@ -68,11 +68,29 @@ class KeeperHubClient:
         if self._owns_client:
             self._http.close()
 
-    def _check_response(self, response: httpx.Response, path: str) -> None:
+    def _check_response(self, response: httpx.Response, path: str, *, allow_simulation_failure: bool = False) -> None:
         if response.status_code in (401, 403):
             raise KeeperHubAuthError(
                 f"KeeperHub rejected the configured API key ({response.status_code}) for {path}"
             )
+        if response.status_code == 400 and allow_simulation_failure:
+            # A simulate=true contract-call that would revert (or whose
+            # arguments couldn't even be ABI-encoded, e.g. an ambiguous
+            # overloaded function name) comes back as HTTP 400 with a
+            # legitimate ProtocolActionSimulation-shaped body
+            # (success/wouldRevert/revertReason) — confirmed directly
+            # against the real API, not merely assumed. This is a real,
+            # informative "the simulation failed" answer, not a malformed
+            # request; call_protocol_action must return it as data, not
+            # raise, so a failed simulation reaches SimulationService as
+            # success=False/wouldRevert=True like any other one, instead
+            # of crashing run_with_recovery outright.
+            try:
+                body = response.json()
+            except ValueError:
+                body = None
+            if isinstance(body, dict) and "wouldRevert" in body:
+                return
         if response.status_code >= 400:
             raise KeeperHubError(
                 f"KeeperHub returned {response.status_code} for {path}: {response.text[:200]}"
@@ -87,13 +105,18 @@ class KeeperHubClient:
         return response
 
     def _post(
-        self, path: str, *, json: dict[str, object], headers: dict[str, str] | None = None
+        self,
+        path: str,
+        *,
+        json: dict[str, object],
+        headers: dict[str, str] | None = None,
+        allow_simulation_failure: bool = False,
     ) -> httpx.Response:
         try:
             response = self._http.post(path, json=json, headers=headers)
         except httpx.RequestError as exc:
             raise KeeperHubConnectionError(f"Could not reach KeeperHub at {path}: {exc}") from exc
-        self._check_response(response, path)
+        self._check_response(response, path, allow_simulation_failure=allow_simulation_failure)
         return response
 
     def get_current_user(self) -> KeeperHubUser:
@@ -128,7 +151,9 @@ class KeeperHubClient:
         if simulate:
             body["simulate"] = True
         headers = {"Idempotency-Key": idempotency_key} if idempotency_key else None
-        response = self._post("/api/execute/contract-call", json=body, headers=headers)
+        response = self._post(
+            "/api/execute/contract-call", json=body, headers=headers, allow_simulation_failure=simulate
+        )
         return response.json()
 
     def simulate_protocol_action(

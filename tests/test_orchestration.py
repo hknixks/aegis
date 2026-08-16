@@ -183,7 +183,7 @@ def test_best_candidate_fails_simulation_alternative_selected() -> None:
             read_calls["count"] += 1
             return httpx.Response(200, json={"result": reads[index]})
         if body.get("simulate") is True:
-            if body["functionName"] == "repay":
+            if body["functionName"] == "repay(address,uint256,uint256,address)":
                 return httpx.Response(200, json={**SIMULATE_TRANSFER_RESULT, "success": False, "wouldRevert": True})
             return httpx.Response(200, json=SIMULATE_TRANSFER_RESULT)
         return httpx.Response(200, json=EXECUTE_TRANSFER_RESULT)

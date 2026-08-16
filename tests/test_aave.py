@@ -53,7 +53,7 @@ def test_build_protocol_action_params_repay() -> None:
     assert params == {
         "contractAddress": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27",
         "chainId": "84532",
-        "functionName": "repay",
+        "functionName": "repay(address,uint256,uint256,address)",
         "functionArgs": '["0xUSDC", "10", "2", "0xWallet"]',
     }
 
@@ -72,7 +72,7 @@ def test_build_protocol_action_params_supply() -> None:
     assert params == {
         "contractAddress": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27",
         "chainId": "84532",
-        "functionName": "supply",
+        "functionName": "supply(address,uint256,address,uint16)",
         "functionArgs": '["0xWETH", "5", "0xWallet", "0"]',
     }
 

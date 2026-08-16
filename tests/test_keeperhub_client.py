@@ -4,7 +4,7 @@ import respx
 
 from aegis.config import Settings
 from aegis.keeperhub import KeeperHubClient
-from aegis.keeperhub.exceptions import KeeperHubAuthError, KeeperHubConnectionError
+from aegis.keeperhub.exceptions import KeeperHubAuthError, KeeperHubConnectionError, KeeperHubError
 from tests.fixtures.keeperhub_payloads import (
     EXECUTE_TRANSFER_RESULT,
     EXECUTION_STATUS_RESULT,
@@ -112,6 +112,83 @@ def test_simulate_protocol_action(settings: Settings) -> None:
     assert result.wouldRevert is False
     sent_body = route.calls.last.request.content
     assert b'"simulate":true' in sent_body
+
+
+@respx.mock
+def test_simulate_protocol_action_returns_a_failed_result_instead_of_raising_on_http_400(
+    settings: Settings,
+) -> None:
+    """Confirmed directly against the real API: a simulate=true contract-
+    call whose simulation would revert (or whose function name is
+    ambiguous between overloads) comes back as HTTP 400 with a
+    legitimate ProtocolActionSimulation-shaped body — this must reach
+    SimulationService as a normal failed result, never an exception, or
+    every real candidate whose simulation fails crashes run_with_recovery
+    instead of being gracefully rejected."""
+    respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "success": False,
+                "status": "simulated",
+                "failureKind": "revert",
+                "wouldRevert": True,
+                "revertReason": "Simulation reverted: execution reverted (unknown custom error)",
+                "error": "Simulation reverted: execution reverted (unknown custom error)",
+            },
+        )
+    )
+
+    with KeeperHubClient(settings) as client:
+        result = client.simulate_protocol_action(
+            "aave-v3/supply",
+            {
+                "contractAddress": "0xPool", "chainId": "84532",
+                "functionName": "supply(address,uint256,address,uint16)", "functionArgs": "[]",
+            },
+        )
+
+    assert result.success is False
+    assert result.wouldRevert is True
+    assert "reverted" in result.revertReason
+
+
+@respx.mock
+def test_a_genuine_400_without_a_simulation_body_still_raises(settings: Settings) -> None:
+    """The lenient-400 handling is narrowly scoped to bodies that actually
+    look like a ProtocolActionSimulation (have a wouldRevert key) — a
+    plain malformed-request 400 must still raise, exactly as before."""
+    respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        return_value=httpx.Response(400, json={"error": "invalid request body"})
+    )
+
+    with KeeperHubClient(settings) as client:
+        with pytest.raises(KeeperHubError):
+            client.simulate_protocol_action(
+                "aave-v3/supply",
+                {"contractAddress": "0xPool", "chainId": "84532", "functionName": "supply", "functionArgs": "[]"},
+            )
+
+
+@respx.mock
+def test_execute_protocol_action_still_raises_on_http_400(settings: Settings) -> None:
+    """The lenient handling only ever applies to simulate=true calls — an
+    unexpected 400 during a real (non-simulated) execute must still raise,
+    which aegis.recovery treats as EXECUTION_UNCERTAIN (a hard stop), not
+    a graceful failure."""
+    respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        return_value=httpx.Response(
+            400, json={"success": False, "wouldRevert": True, "revertReason": "reverted"}
+        )
+    )
+
+    with KeeperHubClient(settings) as client:
+        with pytest.raises(KeeperHubError):
+            client.execute_protocol_action(
+                "aave-v3/supply",
+                {"contractAddress": "0xPool", "chainId": "84532", "functionName": "supply", "functionArgs": "[]"},
+                idempotency_key="fixed-key",
+            )
 
 
 @respx.mock
