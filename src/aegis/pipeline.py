@@ -303,7 +303,7 @@ def run_pipeline(
                     return _stop(RunState.NO_SAFE_ACTION, limit_reason, rounds)
                 audit.record(
                     result.run_id, "PIPELINE_REPLANNING", round=round_number,
-                    reason="confirmed execution/verification failure — re-planning from fresh state",
+                    reason="Confirmed execution or verification failure. Trying a new plan from fresh data.",
                     failure_category=result.failure_category.value if result.failure_category else None,
                 )
                 continue

@@ -317,8 +317,8 @@ def _resume_from_prior_execution(
     within it."""
     _log(
         audit, run_id, "IDEMPOTENCY_GUARD", execution_id=execution_id,
-        recovery_decision="run_id already reached EXECUTING in a prior invocation — "
-        "checking status, not re-executing",
+        recovery_decision="This run already started executing before. Checking its status "
+        "instead of running it again.",
     )
     checked = verification_service.check_status_once(execution_id)
     _log(
@@ -330,7 +330,7 @@ def _resume_from_prior_execution(
     if checked.terminal and checked.succeeded:
         _log(
             audit, run_id, "RESOLVED", execution_id=execution_id, transaction_hash=checked.transactionHash,
-            recovery_decision="confirmed already succeeded on a prior invocation — not re-executing",
+            recovery_decision="This already succeeded before. Not running it again.",
         )
         return RecoveryRunResult(
             run_id=run_id, final_state=RunState.RESOLVED, candidates=[], executed=True,
@@ -340,7 +340,7 @@ def _resume_from_prior_execution(
         _log(
             audit, run_id, "FAILED", execution_id=execution_id,
             failure_category=RecoveryFailureCategory.EXECUTION_FAILURE,
-            recovery_decision="confirmed failed on a prior invocation — safe for a new decision cycle",
+            recovery_decision="This failed before. It is safe to try a new plan.",
         )
         return RecoveryRunResult(
             run_id=run_id, final_state=RunState.FAILED, candidates=[], executed=True,
@@ -350,7 +350,7 @@ def _resume_from_prior_execution(
     _log(
         audit, run_id, "UNCERTAIN", execution_id=execution_id,
         failure_category=RecoveryFailureCategory.EXECUTION_UNCERTAIN,
-        recovery_decision="status still not terminal — stopping, will not execute",
+        recovery_decision="Still not finished. Stopping here and will not run it again.",
     )
     return RecoveryRunResult(
         run_id=run_id, final_state=RunState.UNCERTAIN, candidates=[], executed=True,
@@ -684,7 +684,7 @@ def run_with_recovery(
         _log(
             audit, run_id, "EXECUTE_ERROR", state=state, candidate=selected,
             failure_category=category, failure_reason=str(exc),
-            recovery_decision="no execution id obtained — cannot check status; stopping, never resend",
+            recovery_decision="No execution ID was returned, so status cannot be checked. Stopping. Will not send it again.",
         )
         state = transition(
             audit, run_id, state, RunState.UNCERTAIN, stage="UNCERTAIN", candidate=selected,
@@ -742,7 +742,7 @@ def run_with_recovery(
                 audit, run_id, state, RunState.FAILED, stage="FAILED", candidate=selected,
                 failure_category=category, execution_id=execution.executionId,
                 transaction_hash=checked.transactionHash, risk_before=risk,
-                recovery_decision="confirmed failed after timeout — safe for another planning cycle",
+                recovery_decision="Confirmed failed after a timeout. It is safe to try a new plan.",
             )
             return RecoveryRunResult(
                 run_id=run_id, final_state=RunState.FAILED, candidates=candidates,
@@ -756,7 +756,7 @@ def run_with_recovery(
             state = transition(
                 audit, run_id, state, RunState.UNCERTAIN, stage="UNCERTAIN", candidate=selected,
                 failure_category=category, execution_id=execution.executionId, risk_before=risk,
-                recovery_decision="status still non-terminal after timeout — stopping, do not resend",
+                recovery_decision="Still not finished after a timeout. Stopping. Will not send it again.",
             )
             return RecoveryRunResult(
                 run_id=run_id, final_state=RunState.UNCERTAIN, candidates=candidates,
@@ -824,7 +824,7 @@ def run_with_recovery(
             failure_category=category,
             failure_reason="execution reached a terminal status but did not succeed",
             execution_id=execution.executionId, transaction_hash=verification.transactionHash,
-            risk_before=risk, recovery_decision="confirmed failed via KeeperHub status — safe for another planning cycle",
+            risk_before=risk, recovery_decision="KeeperHub confirms this failed. It is safe to try a new plan.",
         )
         return RecoveryRunResult(
             run_id=run_id, final_state=RunState.FAILED, candidates=candidates,
@@ -841,7 +841,7 @@ def run_with_recovery(
     _log(
         audit, run_id, "REASSESS_RISK", state=state, candidate=selected,
         risk_before=risk, risk_after=risk_after, failure_category=resolved_category,
-        recovery_decision="resolved" if resolved_category is None else "risk not resolved — another cycle may be needed",
+        recovery_decision="resolved" if resolved_category is None else "Risk is still not fixed. May need another try.",
     )
 
     state = transition(

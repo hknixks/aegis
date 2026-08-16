@@ -4,12 +4,30 @@ import { ArchitectureDiagram } from "@/components/landing/ArchitectureDiagram";
 const HOW_IT_WORKS = ["Detect", "Analyze", "Evaluate", "Simulate", "Execute", "Verify"];
 
 const FEATURES = [
-  { title: "Execution-aware decisions", detail: "Every candidate is scored on financial outcome and execution feasibility together — a broken execution path can never win on financial merit alone." },
-  { title: "Simulation before execution", detail: "Mandatory, real, against the live chain — a candidate that would revert is never proposed for execution, no matter how good it looks on paper." },
-  { title: "Policy controls", detail: "A deterministic, pure gate — chain, protocol, wallet, and spending-limit allowlists that no model output can override." },
-  { title: "Recovery and re-planning", detail: "A rejected candidate never blocks the loop — Aegis re-plans from fresh data, bounded by hard round and spending limits." },
-  { title: "Onchain verification", detail: "Success is never assumed from a submission response — Aegis re-reads the position after execution and confirms the risk actually dropped." },
-  { title: "Full audit trail", detail: "Every stage, every score, every rejection reason, under one run ID — the same data the dashboard renders, never reconstructed." },
+  {
+    title: "Execution-aware decisions",
+    detail: "Aegis scores every option two ways: how much it helps, and how likely it is to work. A good idea that cannot be done safely never wins.",
+  },
+  {
+    title: "Simulation before execution",
+    detail: "Aegis tests every action for real before it runs it. If the test fails, Aegis will not try it, no matter how good it looks.",
+  },
+  {
+    title: "Policy controls",
+    detail: "Clear rules decide what is allowed: which chain, which action, which wallet, and how much. No model can change these rules.",
+  },
+  {
+    title: "Recovery and re-planning",
+    detail: "If one option is rejected, Aegis does not stop. It checks fresh data and tries the next best option, within safe limits.",
+  },
+  {
+    title: "Onchain verification",
+    detail: "Aegis never assumes an action worked. It reads the position again after acting and checks that the risk actually went down.",
+  },
+  {
+    title: "Full audit trail",
+    detail: "Every step, every score, and every reason is recorded under one run ID. This is the same data shown on the dashboard.",
+  },
 ];
 
 export default function LandingPage() {
@@ -23,8 +41,8 @@ export default function LandingPage() {
             Execution-Aware DeFi Guardian
           </h1>
           <p className="max-w-2xl text-base text-console-muted sm:text-lg">
-            Aegis protects DeFi positions by evaluating both financial risk and execution risk,
-            then choosing the safest viable intervention and executing it through KeeperHub.
+            Aegis watches your DeFi position. If it gets risky, Aegis picks the safest fix, not
+            just the best one on paper, and carries it out through KeeperHub.
           </p>
           <div className="flex flex-wrap gap-3 pt-2">
             <Link
@@ -50,19 +68,14 @@ export default function LandingPage() {
         <div className="mx-auto grid max-w-5xl gap-8 px-4 py-16 sm:grid-cols-2 sm:px-6 lg:px-8">
           <div>
             <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-console-muted">Problem</h2>
-            <p className="text-lg text-console-text">
-              Most agents can decide what to do.
-            </p>
-            <p className="text-lg text-console-text">
-              The difficult part is executing that decision safely onchain.
-            </p>
+            <p className="text-lg text-console-text">Most agents can decide what to do.</p>
+            <p className="text-lg text-console-text">The hard part is doing it safely onchain.</p>
           </div>
           <div>
             <h2 className="mb-3 text-xs font-semibold uppercase tracking-widest text-console-muted">Solution</h2>
             <p className="text-lg text-console-text">
-              Aegis evaluates the financial outcome <em>and</em> the execution feasibility of every
-              intervention before acting — and rejects a financially attractive action outright if
-              it can&apos;t actually be executed safely.
+              Aegis checks two things before it acts: will this help, and can it be done safely?
+              If a good-looking fix cannot be done safely, Aegis will not use it.
             </p>
           </div>
         </div>
@@ -88,14 +101,13 @@ export default function LandingPage() {
         <div className="mx-auto max-w-5xl px-4 py-16 sm:px-6 lg:px-8">
           <h2 className="mb-4 text-xs font-semibold uppercase tracking-widest text-console-muted">Why KeeperHub</h2>
           <div className="flex flex-col gap-2 text-lg text-console-text">
-            <p>Hermes can read a position and propose a decision.</p>
-            <p>Aegis&apos;s policy engine and execution-aware scoring control what is actually allowed.</p>
-            <p>KeeperHub provides the onchain execution and reliability layer — simulation, broadcast, and status, for every write this project ever makes.</p>
+            <p>Hermes can read a position and suggest a decision.</p>
+            <p>Aegis&apos;s own rules decide what is actually allowed.</p>
+            <p>KeeperHub does the onchain work: it runs the test, sends the transaction, and reports the result, every time.</p>
           </div>
           <p className="mt-4 max-w-2xl text-sm text-console-muted">
-            Aegis never holds a private key and never signs or broadcasts a transaction itself —
-            there is exactly one path from a decision to an onchain effect, and it goes through
-            KeeperHub.
+            Aegis never holds a private key. It never signs or sends a transaction on its own.
+            Every action goes through KeeperHub.
           </p>
         </div>
       </section>
@@ -125,7 +137,7 @@ export default function LandingPage() {
 
       <footer className="border-t border-console-border">
         <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-8 text-xs text-console-muted sm:px-6 lg:px-8">
-          <span>Aegis — Base Sepolia only. No mainnet path exists.</span>
+          <span>Aegis only works on Base Sepolia. There is no path to mainnet.</span>
           <Link href="/app" className="text-console-text hover:underline">
             Launch Aegis →
           </Link>

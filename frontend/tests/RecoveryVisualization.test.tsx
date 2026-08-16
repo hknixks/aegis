@@ -38,6 +38,6 @@ describe("RecoveryVisualization — recovery state", () => {
     expect(steps[0]).toHaveAttribute("data-outcome", "rejected");
     expect(steps[1]).toHaveAttribute("data-outcome", "selected");
     expect(screen.getByText(/insufficient allowance/)).toBeInTheDocument();
-    expect(screen.getByText(/re-evaluated alternatives/)).toBeInTheDocument();
+    expect(screen.getByText(/checked other options/)).toBeInTheDocument();
   });
 });

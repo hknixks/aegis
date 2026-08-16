@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { DashboardState } from "@/lib/types";
 import { deriveAgentStatus } from "@/lib/agentStatus";
+import { ConnectWallet } from "./ConnectWallet";
 
 const STATUS_META: Record<string, { label: string; className: string }> = {
   MONITORING: { label: "Monitoring", className: "text-console-muted border-console-border" },
@@ -48,8 +49,12 @@ export function AppNav({ state }: { state: DashboardState | null }) {
           >
             {network}
           </span>
-          <span className="rounded border border-console-border px-2 py-1 font-mono text-console-muted" data-testid="wallet-indicator">
-            {state?.wallet ? `${state.wallet.slice(0, 6)}…${state.wallet.slice(-4)}` : "No wallet"}
+          <span
+            className="rounded border border-console-border px-2 py-1 font-mono text-console-muted"
+            data-testid="wallet-indicator"
+            title="The wallet Aegis is watching, set on the server"
+          >
+            {state?.wallet ? `Watching: ${state.wallet.slice(0, 6)}…${state.wallet.slice(-4)}` : "No wallet"}
           </span>
           <span
             className={`rounded border px-2 py-1 font-mono font-semibold uppercase tracking-widest ${meta.className}`}
@@ -57,6 +62,7 @@ export function AppNav({ state }: { state: DashboardState | null }) {
           >
             {meta.label}
           </span>
+          <ConnectWallet aegisWallet={state?.wallet} />
         </div>
       </div>
     </header>

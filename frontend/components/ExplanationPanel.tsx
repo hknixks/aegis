@@ -46,7 +46,7 @@ export function ExplanationPanel({ explanation }: { explanation: DashboardExplan
         </div>
         <div>
           <dt className="text-[11px] uppercase tracking-widest text-console-muted">Combined Score</dt>
-          <dd className="font-mono text-console-text">{explanation.combined_score ?? "—"}</dd>
+          <dd className="font-mono text-console-text">{explanation.combined_score ?? "N/A"}</dd>
         </div>
       </dl>
       {explanation.rejected_candidates.length > 0 && (
@@ -58,7 +58,7 @@ export function ExplanationPanel({ explanation }: { explanation: DashboardExplan
             {explanation.rejected_candidates.map((decision) => (
               <li key={decision} className="text-sm text-console-muted">
                 <span className="font-mono text-console-text">{decision.replace("_", " ")}</span>
-                {" — "}
+                {": "}
                 {explanation.rejection_reasons[decision]}
               </li>
             ))}

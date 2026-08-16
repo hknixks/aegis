@@ -36,12 +36,12 @@ export function StatusHeader({ state }: { state: DashboardState }) {
                 {state.wallet.slice(0, 6)}…{state.wallet.slice(-4)}
               </span>
             ) : (
-              "—"
+              "N/A"
             )
           }
         />
         <Field label="Protocol" value={state.protocol} />
-        <Field label="Health Factor" value={state.health_factor ?? "—"} />
+        <Field label="Health Factor" value={state.health_factor ?? "N/A"} />
         <Field label="Risk" value={<RiskBadge tier={state.risk_tier} />} />
         <Field label="Incident" value={state.incident_state} />
       </div>
@@ -54,7 +54,7 @@ export function StatusHeader({ state }: { state: DashboardState }) {
                 {state.run_id}
               </span>
             ) : (
-              "—"
+              "N/A"
             )
           }
         />
@@ -62,7 +62,7 @@ export function StatusHeader({ state }: { state: DashboardState }) {
           label="Stage"
           value={
             <span data-testid="stage-value" className={state.running ? "text-risk-atrisk" : ""}>
-              {state.stage ?? "—"}
+              {state.stage ?? "N/A"}
               {state.running && <span className="ml-1 animate-pulse">●</span>}
             </span>
           }

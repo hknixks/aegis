@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Aegis — Execution-Aware DeFi Guardian",
-  description: "Operations console for the Aegis autonomous DeFi risk agent.",
+  title: "Aegis: DeFi Guardian",
+  description: "A simple dashboard for the Aegis DeFi safety agent.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

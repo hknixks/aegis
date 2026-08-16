@@ -26,7 +26,7 @@ export function RecoveryVisualization({ steps }: { steps: DashboardRecoveryStep[
               <div className="flex items-center justify-between">
                 <span className="font-semibold text-console-text">
                   {step.action.replace("_", " ")}
-                  {step.amount ? ` — ${step.amount}` : ""}
+                  {step.amount ? `: ${step.amount}` : ""}
                 </span>
                 <span className="text-xs font-semibold uppercase tracking-widest">
                   {step.outcome === "selected" ? (
@@ -40,7 +40,7 @@ export function RecoveryVisualization({ steps }: { steps: DashboardRecoveryStep[
             </div>
             {index < steps.length - 1 && (
               <div className="pl-3 text-xs text-console-muted">
-                ↓ Aegis re-evaluated alternatives
+                ↓ Aegis checked other options
               </div>
             )}
           </div>

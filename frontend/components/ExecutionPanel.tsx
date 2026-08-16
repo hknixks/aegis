@@ -48,7 +48,7 @@ export function ExecutionPanel({ execution }: { execution: DashboardExecution })
           <div className="text-[11px] uppercase tracking-widest text-console-muted">Policy</div>
           <div className="font-mono text-console-text">
             {execution.policy_approved === null
-              ? "—"
+              ? "N/A"
               : execution.policy_approved
                 ? "✓ Approved"
                 : "✕ Rejected"}
@@ -63,13 +63,13 @@ export function ExecutionPanel({ execution }: { execution: DashboardExecution })
             KeeperHub Execution ID
           </div>
           <div className="font-mono text-sm text-console-text" data-testid="execution-id">
-            {execution.execution_id ?? "—"}
+            {execution.execution_id ?? "N/A"}
           </div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-widest text-console-muted">Transaction Hash</div>
           <div className="break-all font-mono text-sm text-console-text" data-testid="transaction-hash">
-            {execution.transaction_hash ?? "—"}
+            {execution.transaction_hash ?? "N/A"}
           </div>
         </div>
       </div>

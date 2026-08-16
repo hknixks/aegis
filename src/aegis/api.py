@@ -336,7 +336,7 @@ def _dashboard_state_from_handle(handle: RunHandle) -> DashboardState:
     elif result.resolved:
         status, incident_state = "Resolved", "Resolved"
     elif result.final_state is RunState.UNCERTAIN:
-        status, incident_state = "Uncertain — Stopped", "Uncertain"
+        status, incident_state = "Uncertain, Stopped", "Uncertain"
     elif result.final_state is RunState.NO_SAFE_ACTION:
         status, incident_state = "No Safe Action", "Blocked"
     elif result.final_state is RunState.READY_TO_EXECUTE:

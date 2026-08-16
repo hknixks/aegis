@@ -28,6 +28,6 @@ describe("Landing page", () => {
 
   it("names KeeperHub as the execution layer without overclaiming Hermes's current role", () => {
     render(<LandingPage />);
-    expect(screen.getByText(/onchain execution and reliability layer/i)).toBeInTheDocument();
+    expect(screen.getByText(/KeeperHub does the onchain work/i)).toBeInTheDocument();
   });
 });

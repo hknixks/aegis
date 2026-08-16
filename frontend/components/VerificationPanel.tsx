@@ -16,7 +16,7 @@ export function VerificationPanel({ verification }: { verification: DashboardVer
         <div>
           <div className="mb-2 text-[11px] uppercase tracking-widest text-console-muted">Before</div>
           <div className="font-mono text-2xl text-console-text">
-            {verification.before_health_factor ?? "—"}
+            {verification.before_health_factor ?? "N/A"}
           </div>
           <div className="mt-1">
             <RiskBadge tier={verification.before_risk} />
@@ -48,7 +48,7 @@ export function VerificationPanel({ verification }: { verification: DashboardVer
         ) : (
           <div className="flex items-center gap-2 text-sm font-semibold text-risk-atrisk" data-testid="incident-not-resolved">
             <span aria-hidden="true">↻</span>
-            Incident Not Resolved — Re-Planning
+            Incident Not Resolved: Trying Again
           </div>
         )}
       </div>

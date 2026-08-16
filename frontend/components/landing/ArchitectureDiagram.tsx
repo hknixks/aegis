@@ -1,10 +1,10 @@
 const LAYERS = [
-  { label: "Decision Engine", detail: "Financial + execution scoring, deterministic" },
-  { label: "Policy Engine", detail: "Hard allowlist gate — chain, protocol, wallet, amount" },
-  { label: "Simulation", detail: "Mandatory, real, before anything is proposed for execution" },
-  { label: "KeeperHub", detail: "The only onchain execution layer — simulate, execute, verify" },
-  { label: "Base Sepolia", detail: "Public testnet" },
-  { label: "Verification & Audit", detail: "Fresh position re-read, one shared run ID" },
+  { label: "Decision Engine", detail: "Scores every option on cost and safety. Always the same rules." },
+  { label: "Policy Engine", detail: "A checklist of what is allowed: chain, action, wallet, and amount." },
+  { label: "Simulation", detail: "Every action is tested for real before it runs, no exceptions." },
+  { label: "KeeperHub", detail: "The only place a transaction is tested, sent, and checked." },
+  { label: "Base Sepolia", detail: "A public test network. No real money is involved." },
+  { label: "Verification and Audit", detail: "Reads the position again after acting. One run ID, full history." },
 ];
 
 export function ArchitectureDiagram() {

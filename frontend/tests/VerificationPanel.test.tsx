@@ -34,6 +34,6 @@ describe("VerificationPanel — verification result", () => {
       },
     });
     render(<VerificationPanel verification={verification} />);
-    expect(screen.getByTestId("incident-not-resolved")).toHaveTextContent(/Re-Planning/);
+    expect(screen.getByTestId("incident-not-resolved")).toHaveTextContent(/Trying Again/);
   });
 });

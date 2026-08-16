@@ -11,7 +11,7 @@ function ScoreCell({ label, value }: { label: string; value: string | null }) {
   return (
     <div className="flex flex-col items-center">
       <span className="text-[10px] uppercase tracking-widest text-console-muted">{label}</span>
-      <span className="font-mono text-lg text-console-text">{value ?? "—"}</span>
+      <span className="font-mono text-lg text-console-text">{value ?? "N/A"}</span>
     </div>
   );
 }

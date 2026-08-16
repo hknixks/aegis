@@ -49,18 +49,18 @@ export function RiskPanel({ position }: { position: DashboardPosition }) {
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-widest text-console-muted">Threshold</div>
-          <div className="font-mono text-console-text">{position.risk_threshold ?? "—"}</div>
+          <div className="font-mono text-console-text">{position.risk_threshold ?? "N/A"}</div>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-widest text-console-muted">Last Update</div>
           <div className="font-mono text-xs text-console-text">
-            {position.last_update ? new Date(position.last_update).toLocaleString() : "—"}
+            {position.last_update ? new Date(position.last_update).toLocaleString() : "N/A"}
           </div>
         </div>
       </div>
 
       <div className="mb-2 flex items-center justify-between">
-        <span className="font-mono text-2xl text-console-text">{position.health_factor ?? "—"}</span>
+        <span className="font-mono text-2xl text-console-text">{position.health_factor ?? "N/A"}</span>
         <RiskBadge tier={position.risk_level as string | null} />
       </div>
       <HealthFactorGauge value={hf} threshold={threshold} />

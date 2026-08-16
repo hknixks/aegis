@@ -138,8 +138,8 @@ export function Dashboard() {
       <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xl text-sm text-console-muted">
-          Aegis does not simply choose the financially best action — it chooses the best action
-          that can also be executed safely.
+          Aegis does not just pick the action that looks best. It picks the action that also
+          works safely.
         </p>
         <ModeToggle mode={mode} onChange={setMode} />
       </div>
@@ -204,8 +204,8 @@ export function Dashboard() {
               data-testid="no-position-data"
             >
               {state.running
-                ? `Run in progress — stage: ${state.stage ?? "starting"}…`
-                : "No position data available yet."}
+                ? `Working. Current step: ${state.stage ?? "starting"}...`
+                : "No position data yet."}
             </div>
           ) : (
             <>

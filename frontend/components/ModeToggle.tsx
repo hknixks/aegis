@@ -36,7 +36,7 @@ export function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mo
           className="rounded border border-risk-atrisk/40 bg-risk-atrisk/10 px-2 py-1 text-[11px] font-bold uppercase tracking-widest text-risk-atrisk"
           data-testid="demo-data-banner"
         >
-          ⚠ DEMO DATA — Not Real Blockchain Activity
+          ⚠ DEMO DATA: Not Real Blockchain Activity
         </span>
       )}
       {mode === "live_dry_run" && (
@@ -44,7 +44,7 @@ export function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mo
           className="rounded border border-risk-safe/40 bg-risk-safe/10 px-2 py-1 text-[11px] font-bold uppercase tracking-widest text-risk-safe"
           data-testid="live-dry-run-banner"
         >
-          ● LIVE DRY RUN — Real Backend State, Never Broadcasts
+          ● LIVE DRY RUN: Real Backend Data, Never Sends
         </span>
       )}
       {mode === "live_execution" && (
@@ -52,7 +52,7 @@ export function ModeToggle({ mode, onChange }: { mode: Mode; onChange: (mode: Mo
           className="rounded border border-risk-critical/40 bg-risk-critical/10 px-2 py-1 text-[11px] font-bold uppercase tracking-widest text-risk-critical"
           data-testid="live-execution-banner"
         >
-          ▲ LIVE EXECUTION — Real Base Sepolia Transaction
+          ▲ LIVE EXECUTION: A Real Base Sepolia Transaction
         </span>
       )}
     </div>
