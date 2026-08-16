@@ -16,3 +16,7 @@ htmlcov/
 .env
 .env.*
 !.env.example
+
+# Generated Aegis run audit trails (aegis.demo_orchestrator)
+aegis_runs.jsonl
+*.jsonl

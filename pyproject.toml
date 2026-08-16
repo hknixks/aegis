@@ -1,7 +1,7 @@
 [project]
 name = "aegis"
 version = "0.1.0"
-description = "Autonomous DeFi risk management agent — Phase 1: project scaffold and KeeperHub integration layer"
+description = "Execution-aware DeFi guardian: evaluates financial and execution risk, then simulates, executes, and verifies the safest viable intervention through KeeperHub"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
@@ -14,6 +14,26 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "respx>=0.21",
+]
+# Only required for Hermes's real runtime path (AnthropicLlmClient, a live
+# KeeperHub MCP session). Not needed to run this project's test suite —
+# HermesAgent and HermesMcpGateway are tested against fakes.
+hermes = [
+    "anthropic>=0.40",
+    # Pinned to the major version this project's _LiveMcpSession was
+    # implemented and inspected against (mcp 2.0.0) — its Streamable HTTP
+    # client API (mcp.client.streamable_http.streamable_http_client,
+    # snake_case result fields) is not guaranteed stable across 1.x.
+    "mcp>=2.0,<3",
+]
+# The read-only dashboard API server (aegis.api) — never required to run
+# the core agent, the CLI, or the test suite. Kept isolated so the
+# dashboard's HTTP surface can't accidentally become a second execution
+# path: it only ever imports aegis.pipeline/aegis.audit, never signs or
+# broadcasts anything itself.
+api = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.scripts]
@@ -28,3 +48,6 @@ packages = ["src/aegis"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live_integration: hits the real KeeperHub API on Base Sepolia. Requires AEGIS_LIVE_INTEGRATION_TESTS=1 and a real KEEPERHUB_API_KEY; always dry-run, never broadcasts, deselected by default.",
+]

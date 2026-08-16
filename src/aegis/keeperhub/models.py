@@ -32,6 +32,55 @@ class KeeperHubChain(BaseModel):
     model_config = {"extra": "ignore"}
 
 
+class ProtocolActionSimulation(BaseModel):
+    """Response shape of a simulate=true protocol-action call."""
+
+    success: bool
+    wouldRevert: bool
+    gasEstimate: str | None = None
+    sponsored: bool | None = None
+    simulatedReturnValue: object | None = None
+    revertReason: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+class ProtocolActionExecution(BaseModel):
+    """Response shape of a real (non-simulated) protocol-action call."""
+
+    executionId: str
+    status: str
+    transactionHash: str | None = None
+    transactionLink: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+
+class ExecutionStatus(BaseModel):
+    """Response shape of the execution-status poll endpoint.
+
+    `unconfirmed` means the transaction is on chain but not yet confirmed —
+    it is not terminal and must not be treated as failure or retried.
+    """
+
+    executionId: str
+    status: str
+    transactionHash: str | None = None
+    transactionLink: str | None = None
+    sponsored: bool | None = None
+    error: str | None = None
+
+    model_config = {"extra": "ignore"}
+
+    @property
+    def terminal(self) -> bool:
+        return self.status in ("completed", "failed")
+
+    @property
+    def succeeded(self) -> bool:
+        return self.status == "completed" and self.error is None
+
+
 class HealthCheckResult(BaseModel):
     """Outcome of KeeperHubClient.health_check()."""
 

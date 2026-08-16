@@ -5,6 +5,11 @@ import respx
 from aegis.config import Settings
 from aegis.keeperhub import KeeperHubClient
 from aegis.keeperhub.exceptions import KeeperHubAuthError, KeeperHubConnectionError
+from tests.fixtures.keeperhub_payloads import (
+    EXECUTE_TRANSFER_RESULT,
+    EXECUTION_STATUS_RESULT,
+    SIMULATE_TRANSFER_RESULT,
+)
 
 
 @pytest.fixture
@@ -89,3 +94,68 @@ def test_list_chains_raises_connection_error(settings: Settings) -> None:
     with KeeperHubClient(settings) as client:
         with pytest.raises(KeeperHubConnectionError):
             client.list_chains()
+
+
+@respx.mock
+def test_simulate_protocol_action(settings: Settings) -> None:
+    route = respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        return_value=httpx.Response(200, json=SIMULATE_TRANSFER_RESULT)
+    )
+
+    with KeeperHubClient(settings) as client:
+        result = client.simulate_protocol_action(
+            "aave-v3/repay",
+            {"contractAddress": "0xPool", "chainId": "84532", "functionName": "repay", "functionArgs": "[]"},
+        )
+
+    assert result.success is True
+    assert result.wouldRevert is False
+    sent_body = route.calls.last.request.content
+    assert b'"simulate":true' in sent_body
+
+
+@respx.mock
+def test_execute_protocol_action_sends_idempotency_header(settings: Settings) -> None:
+    route = respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        return_value=httpx.Response(200, json=EXECUTE_TRANSFER_RESULT)
+    )
+
+    with KeeperHubClient(settings) as client:
+        result = client.execute_protocol_action(
+            "aave-v3/repay",
+            {"contractAddress": "0xPool", "chainId": "84532", "functionName": "repay", "functionArgs": "[]"},
+            idempotency_key="fixed-key",
+        )
+
+    assert result.executionId == EXECUTE_TRANSFER_RESULT["executionId"]
+    assert result.transactionHash == EXECUTE_TRANSFER_RESULT["transactionHash"]
+    assert route.calls.last.request.headers["idempotency-key"] == "fixed-key"
+
+
+@respx.mock
+def test_get_protocol_action_status(settings: Settings) -> None:
+    execution_id = "zkn8vu62dmox0diyzulr0"
+    respx.get(f"https://app.keeperhub.com/api/execute/{execution_id}/status").mock(
+        return_value=httpx.Response(200, json=EXECUTION_STATUS_RESULT)
+    )
+
+    with KeeperHubClient(settings) as client:
+        status = client.get_protocol_action_status(execution_id)
+
+    assert status.status == "completed"
+    assert status.terminal is True
+    assert status.succeeded is True
+
+
+@respx.mock
+def test_call_protocol_action_raises_connection_error(settings: Settings) -> None:
+    respx.post("https://app.keeperhub.com/api/execute/contract-call").mock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    with KeeperHubClient(settings) as client:
+        with pytest.raises(KeeperHubConnectionError):
+            client.simulate_protocol_action(
+                "aave-v3/repay",
+                {"contractAddress": "0xPool", "chainId": "84532", "functionName": "repay", "functionArgs": "[]"},
+            )
