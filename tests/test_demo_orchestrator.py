@@ -87,6 +87,64 @@ def test_live_dry_run_rejects_a_chain_allowlist_without_base_sepolia() -> None:
         start_run(DemoMode.LIVE_DRY_RUN, settings=settings)
 
 
+# --- wallet identity: a connected wallet, never the dev/KeeperHub wallet --
+
+
+def test_live_dry_run_uses_the_connected_wallet_when_one_is_provided() -> None:
+    """The whole point of wallet_address: a browser-connected wallet must
+    drive what gets monitored, not settings.aegis_expected_wallet_address
+    (that stays a separate, execution-side concern — see PolicyEngine's
+    own wallet-pin check, untouched by this)."""
+    settings = _live_settings(
+        keeperhub_base_url="http://127.0.0.1:1", keeperhub_timeout_seconds=1,  # type: ignore[arg-type]
+    )
+    handle = start_run(DemoMode.LIVE_DRY_RUN, settings=settings, wallet_address="0xConnectedUserWallet")
+    assert handle.wallet == "0xConnectedUserWallet"
+    assert handle.wallet_source == "connected"
+
+
+def test_live_dry_run_falls_back_to_the_dev_wallet_when_none_is_connected() -> None:
+    settings = _live_settings(
+        keeperhub_base_url="http://127.0.0.1:1", keeperhub_timeout_seconds=1,  # type: ignore[arg-type]
+    )
+    handle = start_run(DemoMode.LIVE_DRY_RUN, settings=settings)
+    assert handle.wallet == "0xWallet"
+    assert handle.wallet_source == "dev_default"
+
+
+def test_live_dry_run_accepts_a_connected_wallet_with_no_dev_default_configured() -> None:
+    """This is the actual "usable by ANY user" guarantee: a deployment
+    with no AEGIS_EXPECTED_WALLET_ADDRESS at all must still work for
+    whoever connects a wallet — the dev wallet was never required to be
+    the user."""
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        keeperhub_api_key="kh_test123", aegis_debt_asset="0xUSDC", aegis_collateral_asset="0xWETH",
+        keeperhub_base_url="http://127.0.0.1:1", keeperhub_timeout_seconds=1,  # type: ignore[arg-type]
+    )
+    handle = start_run(DemoMode.LIVE_DRY_RUN, settings=settings, wallet_address="0xConnectedUserWallet")
+    assert handle.wallet == "0xConnectedUserWallet"
+    assert handle.wallet_source == "connected"
+
+
+def test_live_dry_run_still_rejects_when_neither_wallet_is_available() -> None:
+    settings = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        keeperhub_api_key="kh_test123", aegis_debt_asset="0xUSDC", aegis_collateral_asset="0xWETH",
+    )
+    with pytest.raises(LiveConfigMissingError):
+        start_run(DemoMode.LIVE_DRY_RUN, settings=settings)
+
+
+def test_fixture_ignores_a_connected_wallet_address() -> None:
+    """FIXTURE's position data is entirely canned — pairing a real
+    connected address with fabricated numbers would be misleading, so it
+    always reports its own fixed demo wallet regardless of what's passed."""
+    handle = start_run(DemoMode.FIXTURE, wallet_address="0xConnectedUserWallet")
+    assert handle.wallet != "0xConnectedUserWallet"
+    assert handle.wallet_source == "fixture"
+
+
 # --- 3/6: LIVE_EXECUTION requires confirm + autonomous flag + preflight --
 
 

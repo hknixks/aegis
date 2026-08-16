@@ -145,6 +145,164 @@ describe("Dashboard — KeeperHub / backend unavailable", () => {
   });
 });
 
+describe("Dashboard — connecting a wallet drives what gets monitored", () => {
+  function stubProvider(accounts: string[]) {
+    const request = vi.fn().mockImplementation(({ method }: { method: string }) => {
+      if (method === "eth_requestAccounts") return Promise.resolve(accounts);
+      if (method === "eth_chainId") return Promise.resolve("0x14a34");
+      return Promise.reject(new Error(`unexpected method ${method}`));
+    });
+    Object.defineProperty(window, "ethereum", {
+      value: { request, on: vi.fn(), removeListener: vi.fn() },
+      configurable: true,
+    });
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    Object.defineProperty(window, "ethereum", { value: undefined, configurable: true });
+  });
+
+  it("never sends a wallet for FIXTURE mode, even when one is connected", async () => {
+    stubProvider(["0xAbC1230000000000000000000000000000dEf9AB"]);
+    const fetchMock = makeRunsBackend();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(await screen.findByTestId("connect-wallet-button"));
+    await screen.findByTestId("connect-wallet-connected");
+
+    // Connecting while still in FIXTURE mode must not trigger a new POST —
+    // FIXTURE ignores wallet identity entirely (see
+    // aegis.demo_orchestrator.start_run's FIXTURE branch).
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends the connected wallet's address as the wallet_address for LIVE_DRY_RUN", async () => {
+    stubProvider(["0xAbC1230000000000000000000000000000dEf9AB"]);
+    const fetchMock = makeRunsBackend();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    fireEvent.click(await screen.findByTestId("connect-wallet-button"));
+    await screen.findByTestId("connect-wallet-connected");
+
+    fireEvent.click(screen.getByTestId("mode-toggle-live-dry-run"));
+
+    await waitFor(() => {
+      const postCalls = fetchMock.mock.calls.filter(
+        (call) => (call[1] as RequestInit | undefined)?.method === "POST"
+      );
+      const lastPost = postCalls[postCalls.length - 1];
+      const body = JSON.parse((lastPost?.[1] as RequestInit).body as string);
+      expect(body.wallet).toEqual({
+        address: "0xAbC1230000000000000000000000000000dEf9AB",
+        chain: "84532",
+        connected: true,
+      });
+    });
+  });
+
+  it("omits wallet from the POST body when nothing is connected", async () => {
+    const fetchMock = makeRunsBackend();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByTestId("mode-toggle-live-dry-run"));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+
+    const postCall = fetchMock.mock.calls[2] as [string, RequestInit];
+    expect(JSON.parse(postCall[1].body as string)).toEqual({ mode: "live_dry_run" });
+  });
+
+  it("shows a prompt to connect a wallet when live_dry_run is showing the dev-default wallet", async () => {
+    const fetchMock = makeRunsBackend({ wallet_source: "dev_default" });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<Dashboard />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    fireEvent.click(screen.getByTestId("mode-toggle-live-dry-run"));
+
+    expect(await screen.findByTestId("connect-wallet-prompt")).toBeInTheDocument();
+  });
+});
+
+describe("Dashboard — incident state drives the layout, not raw candidate counts", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("shows a clean safe state and never fabricates candidates when there is no active incident", async () => {
+    vi.stubGlobal(
+      "fetch",
+      makeRunsBackend({
+        incident_state: "NO_ACTIVE_INCIDENT",
+        system_status: "MONITORING",
+        run_state: "DRY_RUN_COMPLETE",
+        no_debt: true,
+        health_factor: null,
+        risk_tier: "SAFE",
+        position: {
+          collateral: "0",
+          debt: "0",
+          health_factor: null,
+          no_debt: true,
+          risk_level: "SAFE",
+          risk_threshold: "1.2",
+          timestamp: "2026-08-15T12:00:00Z",
+          last_update: "2026-08-15T12:00:00Z",
+        },
+        candidates: [],
+        explanation: null,
+      })
+    );
+
+    render(<Dashboard />);
+
+    const safePanel = await screen.findByTestId("safe-no-incident-panel");
+    expect(safePanel).toHaveTextContent(/no outstanding debt/i);
+    expect(safePanel).toHaveTextContent(/monitoring/i);
+    expect(screen.queryByTestId("candidate-table")).not.toBeInTheDocument();
+    expect(screen.getByTestId("incident-state-value")).toHaveTextContent(/no active incident/i);
+    // no giant sentinel number anywhere on the page
+    expect(document.body.textContent).not.toMatch(/\d{10,}/);
+  });
+
+  it("shows the full execution-aware flow when there is an active or resolved incident", async () => {
+    vi.stubGlobal(
+      "fetch",
+      makeRunsBackend({
+        incident_state: "RESOLVED",
+        run_state: "DRY_RUN_COMPLETE",
+        candidates: [
+          {
+            action: "ADD_COLLATERAL",
+            asset: "USDC",
+            amount: "500.0",
+            financial_score: "0.42",
+            execution_score: "95",
+            combined_score: "0.399",
+            eligible: true,
+            final_status: "SELECTED",
+            simulation_status: "PASSED",
+            rejection_reason: null,
+          },
+        ],
+      })
+    );
+
+    render(<Dashboard />);
+
+    await screen.findByTestId("candidate-table");
+    expect(screen.queryByTestId("safe-no-incident-panel")).not.toBeInTheDocument();
+  });
+});
+
 describe("Dashboard — no secret ever reaches the client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

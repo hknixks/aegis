@@ -37,19 +37,22 @@ invariants, tested elsewhere in this project).
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from aegis.audit import AuditEvent, load_events_for_run
 from aegis.config import get_settings
 from aegis.decision_engine import CandidateAction, build_explanation
 from aegis.demo_orchestrator import DemoMode, DemoOrchestrationError, RunHandle, get_run, start_run
 from aegis.recovery import RecoveryRunResult, RunState
+from aegis.risk import RiskAssessment, is_no_debt_health_factor
+
 
 def _cors_allowed_origins() -> list[str]:
     """Read straight from the environment, not via get_settings() —
@@ -82,18 +85,103 @@ app.add_middleware(
 # aegis.risk.RiskLevel is, and stays, a binary SAFE/AT_RISK classification
 # — that is the authoritative signal every real decision in this project
 # is made from, and this module never touches it. The dashboard wants a
-# 4-tier *display* gradient (SAFE/AT_RISK/HIGH/CRITICAL); this is a purely
-# presentational derivation from health_factor/threshold, computed here
-# only, never fed back into any decision.
+# 5-tier *display* gradient (NO_POSITION/SAFE/AT_RISK/HIGH/CRITICAL); this
+# is a purely presentational derivation from health_factor/threshold,
+# computed here only, never fed back into any decision. NO_POSITION means
+# no read has happened yet — distinct from SAFE, which means a real read
+# came back healthy (including a genuine zero-collateral/zero-debt read).
 
-def _display_risk_tier(health_factor: Decimal, threshold: Decimal) -> str:
-    if health_factor >= threshold:
+def _display_risk_tier(risk: RiskAssessment | None) -> str:
+    if risk is None:
+        return "NO_POSITION"
+    if risk.no_debt or risk.health_factor >= risk.threshold:
         return "SAFE"
-    if health_factor >= threshold * Decimal("0.8"):
+    if risk.health_factor >= risk.threshold * Decimal("0.8"):
         return "AT_RISK"
-    if health_factor >= threshold * Decimal("0.6"):
+    if risk.health_factor >= risk.threshold * Decimal("0.6"):
         return "HIGH"
     return "CRITICAL"
+
+
+# --- system / incident / run state: what the four rows in the header mean
+#
+# Every one of these is computed here, server-side, from data the backend
+# already has (audit stage, RunState, RiskAssessment.at_risk/no_debt) —
+# the frontend only ever displays these strings, it never re-derives them
+# from raw numbers. See aegis.recovery.RunState for the underlying
+# state machine these are a coarser, presentation-facing view of.
+
+# SYSTEM STATUS: what Aegis is doing right now, independent of outcome.
+_INTERVENING_STAGES = frozenset({"EXECUTING", "EXECUTED"})
+_VERIFYING_STAGES = frozenset({"VERIFYING", "VERIFIED", "STATUS_CHECKED", "REASSESS_RISK", "ONCHAIN_STATE_INSPECTED"})
+
+
+def _system_status(stage: str | None, running: bool) -> str:
+    if not running:
+        # A finished run returns to "watching" — the same idle state as
+        # before it started. The exact outcome is what incident_state/
+        # run_state are for, not this row.
+        return "MONITORING"
+    if stage in _INTERVENING_STAGES:
+        return "INTERVENING"
+    if stage in _VERIFYING_STAGES:
+        return "VERIFYING"
+    return "ANALYZING"
+
+
+# INCIDENT STATE: is there (or was there) a real risk incident, and what
+# happened to it. This is the fix for the "SAFE position shown as
+# RESOLVED" bug — RunState.RESOLVED is also what a round that never had
+# anything to fix (DO_NOTHING, position already safe) ends in, and those
+# are not the same thing to a user.
+def _incident_state(
+    running: bool, risk_before: RiskAssessment | None, final_state: RunState | None,
+) -> str:
+    if risk_before is None:
+        return "NO_ACTIVE_INCIDENT"
+    if not risk_before.at_risk:
+        # The position was safe (or debt-free) the moment it was read —
+        # DO_NOTHING being selected afterward is correct, not a resolved
+        # incident, because there was never an incident.
+        return "NO_ACTIVE_INCIDENT"
+    if running:
+        return "ACTIVE"
+    if final_state is None:
+        return "UNCERTAIN"
+    if final_state is RunState.RESOLVED:
+        return "RESOLVED"
+    if final_state is RunState.FAILED:
+        return "FAILED"
+    if final_state is RunState.UNCERTAIN:
+        return "UNCERTAIN"
+    if final_state is RunState.NO_SAFE_ACTION:
+        return "FAILED"
+    # READY_TO_EXECUTE (dry-run, or autonomous execution disabled) and any
+    # in-progress recovery state: there is a real, identified incident,
+    # just not (yet, or ever, in dry-run) acted on.
+    return "ACTIVE"
+
+
+# RUN STATE: what kind of run this was and whether it actually broadcast
+# anything — never conflates a dry run with a real one, and a run that
+# never got to execute (SAFE position, or gated) is STOPPED, not FAILED.
+def _run_state(
+    running: bool, error: str | None, mode: DemoMode, executed_for_real: bool, final_state: RunState | None,
+) -> str:
+    if running:
+        return "RUNNING"
+    if error is not None:
+        return "FAILED"
+    if mode in (DemoMode.FIXTURE, DemoMode.LIVE_DRY_RUN):
+        # Neither mode can ever broadcast a real transaction — dry_run is
+        # structural for LIVE_DRY_RUN, and FIXTURE's execution_service is
+        # a bare MagicMock never wired to a real client either way.
+        return "DRY_RUN_COMPLETE"
+    if executed_for_real:
+        return "EXECUTION_COMPLETE"
+    if final_state in (RunState.FAILED, RunState.UNCERTAIN):
+        return "FAILED"
+    return "STOPPED"
 
 
 # --- response schema -----------------------------------------------------
@@ -137,8 +225,10 @@ class DashboardExecution(BaseModel):
 
 class DashboardVerification(BaseModel):
     before_health_factor: str | None
+    before_no_debt: bool
     before_risk: str | None
     after_health_factor: str | None
+    after_no_debt: bool | None
     after_risk: str | None
     risk_reduced: bool | None
     incident_resolved: bool
@@ -166,12 +256,22 @@ class DashboardState(BaseModel):
     stage: str | None
     generated_at: str
     status: str
+    system_status: str
     incident_state: str
+    run_state: str
     network: str
     chain_id: int
     wallet: str | None
+    # Where `wallet` came from — "connected" (a browser-connected USER
+    # WALLET), "dev_default" (Settings.aegis_expected_wallet_address, used
+    # because no wallet was connected), or "fixture" (FIXTURE mode's fixed
+    # demo wallet, unrelated to any real wallet). The frontend uses this
+    # to label whether it's showing the visitor's own position or dev/
+    # demo data — never inferred from the address string itself.
+    wallet_source: Literal["connected", "dev_default", "fixture"]
     protocol: str
     health_factor: str | None
+    no_debt: bool
     risk_level: str | None
     risk_tier: str | None
     position: dict
@@ -185,8 +285,41 @@ class DashboardState(BaseModel):
     error: str | None = None
 
 
+_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+class UserWallet(BaseModel):
+    """The USER WALLET: whichever address a browser wallet extension
+    reported via eth_requestAccounts (see frontend/lib/wallet.ts) — public
+    address only, read-only, and only ever used here to pick which
+    position to monitor. This is never an execution identity: it carries
+    no signature, no session, no delegation of any kind, and does not by
+    itself authorize anything. Whether Aegis can ever act on this
+    wallet's behalf is decided entirely by PolicyEngine's own wallet-pin
+    check (Settings.aegis_expected_wallet_address) against the KeeperHub-
+    authorized execution wallet — a separate, server-side concern this
+    model has no bearing on.
+    """
+
+    address: str
+    chain: str
+    connected: bool
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address_shape(cls, value: str) -> str:
+        if not _ADDRESS_RE.match(value):
+            raise ValueError("address must be a 0x-prefixed 40-hex-character EVM address")
+        return value
+
+
 class StartRunRequest(BaseModel):
     mode: Literal["fixture", "live_dry_run"]
+    # Optional: the connected USER WALLET to monitor. Omitted (or
+    # connected=False) falls back to the server's dev-default wallet —
+    # see aegis.demo_orchestrator.start_run's wallet_source resolution.
+    # FIXTURE mode ignores this entirely (see start_run's docstring).
+    wallet: UserWallet | None = None
 
 
 class StartRunResponse(BaseModel):
@@ -245,8 +378,9 @@ def _execution_panel(round_result: RecoveryRunResult | None) -> DashboardExecuti
 
 def _empty_verification_panel() -> DashboardVerification:
     return DashboardVerification(
-        before_health_factor=None, before_risk=None, after_health_factor=None,
-        after_risk=None, risk_reduced=None, incident_resolved=False,
+        before_health_factor=None, before_no_debt=False, before_risk=None,
+        after_health_factor=None, after_no_debt=None, after_risk=None,
+        risk_reduced=None, incident_resolved=False,
     )
 
 
@@ -259,8 +393,14 @@ def _verification_panel(round_result: RecoveryRunResult | None, resolved: bool) 
     if after is not None:
         risk_reduced = after.health_factor > before.health_factor
     return DashboardVerification(
-        before_health_factor=str(before.health_factor), before_risk=before.level.value,
-        after_health_factor=str(after.health_factor) if after else None,
+        # The raw sentinel value never leaves the backend as a "health
+        # factor" string — when no_debt is true the number is meaningless,
+        # so the field is None and the frontend renders "No debt" from the
+        # boolean instead (see RiskAssessment.no_debt in aegis.risk).
+        before_health_factor=None if before.no_debt else str(before.health_factor),
+        before_no_debt=before.no_debt, before_risk=before.level.value,
+        after_health_factor=None if (after and after.no_debt) else (str(after.health_factor) if after else None),
+        after_no_debt=after.no_debt if after else None,
         after_risk=after.level.value if after else None,
         risk_reduced=risk_reduced, incident_resolved=resolved,
     )
@@ -316,40 +456,58 @@ def _dashboard_state_from_handle(handle: RunHandle) -> DashboardState:
             selection_reason=detail.selection_reason,
         )
 
-    health_factor = str(last_round.risk_after.health_factor) if last_round and last_round.risk_after else (
-        str(last_round.risk_before.health_factor) if last_round and last_round.risk_before else None
+    # health_factor prefers the post-round read, falling back to the
+    # pre-round read for rounds that never executed anything (e.g. SAFE,
+    # DO_NOTHING). Either way, the raw uint256-max sentinel never becomes
+    # a displayed number — no_debt=True means the field is None and the
+    # frontend shows "No debt" from the boolean instead.
+    risk_obj = (last_round.risk_after or last_round.risk_before) if last_round else None
+    no_debt = bool(risk_obj.no_debt) if risk_obj is not None else False
+    health_factor = None if no_debt else (str(risk_obj.health_factor) if risk_obj is not None else None)
+    risk_level = risk_obj.level.value if risk_obj is not None else None
+    risk_tier = _display_risk_tier(risk_obj)
+
+    final_state = result.final_state if result is not None else None
+    system_status = _system_status(handle.latest_stage, handle.running)
+    incident_state = _incident_state(
+        handle.running, last_round.risk_before if last_round else None, final_state,
     )
-    risk_level = (last_round.risk_after or last_round.risk_before).level.value if last_round and (
-        last_round.risk_after or last_round.risk_before
-    ) else None
-    risk_tier = None
-    risk_obj = last_round.risk_after or last_round.risk_before if last_round else None
-    if risk_obj is not None:
-        risk_tier = _display_risk_tier(risk_obj.health_factor, risk_obj.threshold)
+    run_state = _run_state(handle.running, handle.error, handle.mode, executed_for_real=False, final_state=final_state)
 
     if handle.error is not None:
-        status, incident_state = "Error", "Error"
+        status = "Error"
     elif handle.running:
-        status, incident_state = "Running", "Active"
+        status = "Running"
     elif result is None:
-        status, incident_state = "Error", "Error"
+        status = "Error"
+    elif incident_state == "NO_ACTIVE_INCIDENT":
+        status = "Monitoring"
     elif result.resolved:
-        status, incident_state = "Resolved", "Resolved"
+        status = "Resolved"
     elif result.final_state is RunState.UNCERTAIN:
-        status, incident_state = "Uncertain, Stopped", "Uncertain"
+        status = "Uncertain, Stopped"
     elif result.final_state is RunState.NO_SAFE_ACTION:
-        status, incident_state = "No Safe Action", "Blocked"
+        status = "No Safe Action"
     elif result.final_state is RunState.READY_TO_EXECUTE:
-        status, incident_state = "Monitoring", "Active"
+        status = "Monitoring"
     else:
-        status, incident_state = "Recovering", "Re-Planning"
+        status = "Recovering"
 
     detected_events = [e for e in events if e.stage == "DETECTED"]
     last_update = detected_events[-1].timestamp.isoformat() if detected_events else None
-    position: dict[str, str | None] = {
-        "collateral": last_round.position_after.totalCollateralBase if last_round and last_round.position_after else None,
-        "debt": last_round.position_after.totalDebtBase if last_round and last_round.position_after else None,
+    # Collateral/debt: prefer the post-round read, but fall back to the
+    # pre-round read (position_before) for rounds that never executed
+    # anything — that read still happened and came back with real values
+    # (including a real, known zero), so it must not be reported as
+    # "unknown" just because nothing was executed afterward.
+    position_read = (
+        (last_round.position_after or last_round.position_before) if last_round else None
+    )
+    position: dict[str, str | None | bool] = {
+        "collateral": position_read.totalCollateralBase if position_read else None,
+        "debt": position_read.totalDebtBase if position_read else None,
         "health_factor": health_factor,
+        "no_debt": no_debt,
         "risk_level": risk_level,
         "risk_threshold": str(risk_obj.threshold) if risk_obj else None,
         "timestamp": last_update,
@@ -358,8 +516,9 @@ def _dashboard_state_from_handle(handle: RunHandle) -> DashboardState:
     return DashboardState(
         mode=handle.mode.value, run_id=handle.run_id, running=handle.running, stage=handle.latest_stage,
         generated_at=datetime.now(timezone.utc).isoformat(), status=status,
-        incident_state=incident_state, network=handle.network, chain_id=int(handle.network), wallet=handle.wallet,
-        protocol="Aave V3", health_factor=health_factor, risk_level=risk_level, risk_tier=risk_tier,
+        system_status=system_status, incident_state=incident_state, run_state=run_state,
+        network=handle.network, chain_id=int(handle.network), wallet=handle.wallet, wallet_source=handle.wallet_source,
+        protocol="Aave V3", health_factor=health_factor, no_debt=no_debt, risk_level=risk_level, risk_tier=risk_tier,
         position=position,
         candidates=candidates, explanation=explanation,
         execution=_execution_panel(last_round), verification=_verification_panel(last_round, bool(result and result.resolved)),
@@ -411,15 +570,67 @@ def _dashboard_state_from_file_events(run_id: str, events: list[AuditEvent]) -> 
     if any(e.stage == "UNCERTAIN" for e in events):
         execution_status = "uncertain"
 
-    status = "Resolved" if resolved else ("Running" if running else "Stopped")
+    # ANALYZED/REASSESS_RISK record the already-human-scaled health factor
+    # (see recovery.run_with_recovery), so the sentinel check compares
+    # against the human-scaled constant rather than the raw wad one used
+    # by aegis.risk.RiskAssessment.no_debt for a freshly computed reading.
+    before_no_debt = before_hf is not None and is_no_debt_health_factor(Decimal(before_hf))
+    after_no_debt = None if after_hf is None else is_no_debt_health_factor(Decimal(after_hf))
+    no_debt = after_no_debt if after_no_debt is not None else before_no_debt
+    health_factor = None if no_debt else (after_hf or before_hf)
+
+    at_risk_before = before_risk == "AT_RISK"
+    if before_risk is None or not at_risk_before:
+        incident_state = "NO_ACTIVE_INCIDENT"
+    elif running:
+        incident_state = "ACTIVE"
+    elif resolved:
+        incident_state = "RESOLVED"
+    elif execution_status == "failed":
+        incident_state = "FAILED"
+    elif execution_status == "uncertain":
+        incident_state = "UNCERTAIN"
+    else:
+        incident_state = "ACTIVE"
+
+    if resolved:
+        final_state: RunState | None = RunState.RESOLVED
+    elif execution_status == "failed":
+        final_state = RunState.FAILED
+    elif execution_status == "uncertain":
+        final_state = RunState.UNCERTAIN
+    else:
+        final_state = None
+    executed_for_real = execution_id is not None or tx_hash is not None
+    system_status = _system_status(stage, running)
+    run_state = _run_state(running, None, DemoMode.LIVE_EXECUTION, executed_for_real, final_state)
+
+    if running:
+        status = "Running"
+    elif incident_state == "NO_ACTIVE_INCIDENT":
+        status = "Monitoring"
+    elif resolved:
+        status = "Resolved"
+    else:
+        status = "Stopped"
+
+    detected_collateral = detected.detail.get("totalCollateralBase") if detected else None
+    detected_debt = detected.detail.get("totalDebtBase") if detected else None
 
     return DashboardState(
         mode="live_execution", run_id=run_id, running=running, stage=stage,
         generated_at=datetime.now(timezone.utc).isoformat(), status=status,
-        incident_state="Resolved" if resolved else ("Active" if running else "Stopped"),
-        network=network, chain_id=int(network) if network.isdigit() else 0, wallet=wallet, protocol="Aave V3",
-        health_factor=after_hf or before_hf, risk_level=None, risk_tier=None,
-        position={"health_factor": after_hf or before_hf, "last_update": events[-1].timestamp.isoformat()},
+        system_status=system_status, incident_state=incident_state, run_state=run_state,
+        network=network, chain_id=int(network) if network.isdigit() else 0, wallet=wallet,
+        # Always CLI-started (aegis live-demo --confirm never accepts a
+        # connected wallet — see aegis.cli) — dev_default is correct here.
+        wallet_source="dev_default", protocol="Aave V3",
+        health_factor=health_factor, no_debt=no_debt, risk_level=None, risk_tier=None,
+        position={
+            "collateral": detected_collateral, "debt": detected_debt,
+            "health_factor": health_factor, "no_debt": no_debt,
+            "last_update": events[-1].timestamp.isoformat(),
+        },
         candidates=[], explanation=None,
         execution=DashboardExecution(
             simulation_status="NOT_APPLICABLE", would_revert=None, gas_estimate=None, policy_approved=None,
@@ -427,8 +638,10 @@ def _dashboard_state_from_file_events(run_id: str, events: list[AuditEvent]) -> 
             explorer_url=(f"https://sepolia.basescan.org/tx/{tx_hash}" if tx_hash else None),
         ),
         verification=DashboardVerification(
-            before_health_factor=before_hf, before_risk=before_risk,
-            after_health_factor=after_hf, after_risk=None,
+            before_health_factor=None if before_no_debt else before_hf, before_no_debt=before_no_debt,
+            before_risk=before_risk,
+            after_health_factor=None if after_no_debt else after_hf, after_no_debt=after_no_debt,
+            after_risk=None,
             risk_reduced=None, incident_resolved=resolved,
         ),
         audit_timeline=_audit_timeline(events), recovery_steps=[],
@@ -453,8 +666,9 @@ def start_run_endpoint(request: StartRunRequest) -> StartRunResponse:
     not a valid value of `mode` here — see this module's docstring."""
     mode = DemoMode(request.mode)
     settings = get_settings() if mode is DemoMode.LIVE_DRY_RUN else None
+    wallet_address = request.wallet.address if request.wallet and request.wallet.connected else None
     try:
-        handle = start_run(mode, settings=settings)
+        handle = start_run(mode, settings=settings, wallet_address=wallet_address)
     except DemoOrchestrationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return StartRunResponse(run_id=handle.run_id, mode=request.mode)

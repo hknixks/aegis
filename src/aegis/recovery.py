@@ -275,6 +275,13 @@ class RecoveryRunResult:
     failure_category: RecoveryFailureCategory | None = None
     stop_reason: str | None = None
     risk_before: RiskAssessment | None = None
+    # The position as read at DETECTED, before anything else happened
+    # this round — populated even when nothing gets executed (SAFE/
+    # DO_NOTHING, or a round that never reaches execution), unlike
+    # position_after below. aegis.api uses this so collateral/debt can
+    # show a real, known "0" instead of "unknown" whenever a read
+    # actually happened, regardless of whether anything executed.
+    position_before: AaveUserAccountData | None = None
     position_after: AaveUserAccountData | None = None
     risk_after: RiskAssessment | None = None
 
@@ -532,7 +539,7 @@ def run_with_recovery(
         return RecoveryRunResult(
             run_id=run_id, final_state=final_state, candidates=candidates,
             recovery_attempts=recovery_attempts, selected=do_nothing, executed=False,
-            stop_reason=stop_reason, risk_before=risk,
+            stop_reason=stop_reason, risk_before=risk, position_before=position,
         )
 
     selected: CandidateAction | None = None
@@ -645,7 +652,7 @@ def run_with_recovery(
             run_id=run_id, final_state=final_state, candidates=candidates,
             recovery_attempts=recovery_attempts, selected=do_nothing, policy_decision=None,
             simulation=None, verification=None, executed=False,
-            stop_reason=stop_reason, risk_before=risk,
+            stop_reason=stop_reason, risk_before=risk, position_before=position,
         )
 
     if not settings.aegis_autonomous_execution_enabled:
@@ -657,7 +664,7 @@ def run_with_recovery(
             run_id=run_id, final_state=RunState.READY_TO_EXECUTE, candidates=candidates,
             recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
             simulation=selected.simulation_result, verification=None, executed=False,
-            stop_reason="autonomous execution disabled", risk_before=risk,
+            stop_reason="autonomous execution disabled", risk_before=risk, position_before=position,
         )
 
     intent = candidate_to_intent(selected)
@@ -694,7 +701,7 @@ def run_with_recovery(
             run_id=run_id, final_state=RunState.UNCERTAIN, candidates=candidates,
             recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
             simulation=simulation, verification=None, executed=False, failure_category=category,
-            stop_reason=f"execution uncertain: {exc}", risk_before=risk,
+            stop_reason=f"execution uncertain: {exc}", risk_before=risk, position_before=position,
         )
 
     _log(
@@ -748,7 +755,8 @@ def run_with_recovery(
                 run_id=run_id, final_state=RunState.FAILED, candidates=candidates,
                 recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
                 simulation=simulation, verification=checked, executed=True, failure_category=category,
-                stop_reason=f"execution timed out and was confirmed failed: {exc}", risk_before=risk,
+                stop_reason=f"execution timed out and was confirmed failed: {exc}",
+                risk_before=risk, position_before=position,
             )
         else:
             # Still pending/unconfirmed/unknown — this is the honest
@@ -762,7 +770,8 @@ def run_with_recovery(
                 run_id=run_id, final_state=RunState.UNCERTAIN, candidates=candidates,
                 recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
                 simulation=simulation, verification=None, executed=True, failure_category=category,
-                stop_reason=f"execution status still unresolved after timeout: {exc}", risk_before=risk,
+                stop_reason=f"execution status still unresolved after timeout: {exc}",
+                risk_before=risk, position_before=position,
             )
     except Exception as exc:  # noqa: BLE001 - VERIFICATION_FAILURE: verify() itself broke
         # Not a timeout, not a clean terminal result — verify() errored.
@@ -794,7 +803,7 @@ def run_with_recovery(
                 recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
                 simulation=simulation, verification=None, executed=True, failure_category=category,
                 stop_reason=f"verification failed unexpectedly, but the position changed: {exc}",
-                risk_before=risk, position_after=position_after, risk_after=risk_after,
+                risk_before=risk, position_before=position, position_after=position_after, risk_after=risk_after,
             )
         state = transition(
             audit, run_id, state, RunState.UNCERTAIN, stage="UNCERTAIN", candidate=selected,
@@ -805,7 +814,7 @@ def run_with_recovery(
             recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
             simulation=simulation, verification=None, executed=True, failure_category=category,
             stop_reason=f"verification failed unexpectedly and the position is unchanged: {exc}",
-            risk_before=risk, position_after=position_after, risk_after=risk_after,
+            risk_before=risk, position_before=position, position_after=position_after, risk_after=risk_after,
         )
     else:
         _log(
@@ -830,7 +839,8 @@ def run_with_recovery(
             run_id=run_id, final_state=RunState.FAILED, candidates=candidates,
             recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
             simulation=simulation, verification=verification, executed=True, failure_category=category,
-            stop_reason="execution failed on-chain (confirmed via KeeperHub status)", risk_before=risk,
+            stop_reason="execution failed on-chain (confirmed via KeeperHub status)",
+            risk_before=risk, position_before=position,
         )
 
     # 9-10. Verify the resulting position and determine whether the
@@ -852,5 +862,6 @@ def run_with_recovery(
         run_id=run_id, final_state=RunState.RESOLVED, candidates=candidates,
         recovery_attempts=recovery_attempts, selected=selected, policy_decision=final_policy_decision,
         simulation=simulation, verification=verification, executed=True, failure_category=resolved_category,
-        stop_reason=None, risk_before=risk, position_after=position_after, risk_after=risk_after,
+        stop_reason=None, risk_before=risk, position_before=position, position_after=position_after,
+        risk_after=risk_after,
     )

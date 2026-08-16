@@ -2,7 +2,7 @@ import type { DashboardVerification } from "@/lib/types";
 import { RiskBadge } from "./RiskBadge";
 
 export function VerificationPanel({ verification }: { verification: DashboardVerification }) {
-  const hasAfter = verification.after_health_factor !== null;
+  const hasAfter = verification.after_health_factor !== null || verification.after_no_debt !== null;
 
   return (
     <section
@@ -16,7 +16,7 @@ export function VerificationPanel({ verification }: { verification: DashboardVer
         <div>
           <div className="mb-2 text-[11px] uppercase tracking-widest text-console-muted">Before</div>
           <div className="font-mono text-2xl text-console-text">
-            {verification.before_health_factor ?? "N/A"}
+            {verification.before_no_debt ? "No debt" : verification.before_health_factor ?? "N/A"}
           </div>
           <div className="mt-1">
             <RiskBadge tier={verification.before_risk} />
@@ -25,7 +25,7 @@ export function VerificationPanel({ verification }: { verification: DashboardVer
         <div>
           <div className="mb-2 text-[11px] uppercase tracking-widest text-console-muted">After</div>
           <div className="font-mono text-2xl text-console-text">
-            {verification.after_health_factor ?? "pending"}
+            {verification.after_no_debt ? "No debt" : verification.after_health_factor ?? "pending"}
           </div>
           <div className="mt-1">
             <RiskBadge tier={verification.after_risk} />

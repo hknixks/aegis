@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { DashboardState, Mode, StartRunMode } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DashboardState, Mode, StartRunMode, UserWallet } from "@/lib/types";
 import { AegisApiError, pollRun, startRun } from "@/lib/api";
+import { useConnectedWallet } from "@/lib/wallet";
 import { AppNav } from "./AppNav";
 import { ModeToggle } from "./ModeToggle";
 import { StatusHeader } from "./StatusHeader";
@@ -34,6 +35,20 @@ export function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [liveExecutionRunIdInput, setLiveExecutionRunIdInput] = useState("");
+
+  // The single source of truth for the connected USER WALLET — passed to
+  // AppNav for display, and to startRun so LIVE_DRY_RUN monitors this
+  // wallet's own position instead of the server's dev-default one. See
+  // lib/wallet.ts's docstring: connecting here never grants execution
+  // authority, only picks what gets read.
+  const connectedWallet = useConnectedWallet();
+  const userWallet: UserWallet | null = useMemo(
+    () =>
+      connectedWallet.address
+        ? { address: connectedWallet.address, chain: connectedWallet.chainId ?? "", connected: true }
+        : null,
+    [connectedWallet.address, connectedWallet.chainId]
+  );
 
   const pollAbortRef = useRef<AbortController | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -84,14 +99,17 @@ export function Dashboard() {
       setLoading(true);
       setLoadError(null);
       setState(null);
-      startRun(startMode)
+      // FIXTURE ignores wallet regardless (see aegis.demo_orchestrator.
+      // start_run's FIXTURE branch) — only pass it for LIVE_DRY_RUN, so a
+      // connected wallet never gets paired with FIXTURE's canned data.
+      startRun(startMode, startMode === "live_dry_run" ? userWallet : null)
         .then((runId) => watchRun(runId))
         .catch((err: unknown) => {
           setLoading(false);
           setLoadError(describeError(err));
         });
     },
-    [stopPolling, watchRun]
+    [stopPolling, watchRun, userWallet]
   );
 
   // Switching to FIXTURE or LIVE_DRY_RUN auto-starts a fresh run — "one
@@ -109,6 +127,17 @@ export function Dashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  // Connecting/disconnecting/switching the browser wallet while already
+  // watching a live position re-reads against the newly connected wallet
+  // — FIXTURE's canned data never changes with it (excluded above), so
+  // this only ever re-triggers a real LIVE_DRY_RUN read.
+  useEffect(() => {
+    if (mode === "live_dry_run") {
+      startAndWatch(mode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedWallet.address]);
 
   useEffect(() => stopPolling, [stopPolling]);
 
@@ -134,7 +163,7 @@ export function Dashboard() {
 
   return (
     <>
-      <AppNav state={state} />
+      <AppNav state={state} wallet={connectedWallet} />
       <div className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="max-w-xl text-sm text-console-muted">
@@ -143,6 +172,17 @@ export function Dashboard() {
         </p>
         <ModeToggle mode={mode} onChange={setMode} />
       </div>
+
+      {mode === "live_dry_run" && !userWallet && (
+        <div
+          className="rounded-lg border border-console-border bg-console-panel p-4 text-sm text-console-muted"
+          data-testid="connect-wallet-prompt"
+        >
+          Showing the dev-default wallet.{" "}
+          <span className="text-console-text">Connect your own wallet</span> (top right) to monitor your own
+          position instead.
+        </div>
+      )}
 
       {mode === "live_execution" && (
         <form
@@ -198,7 +238,7 @@ export function Dashboard() {
       {state && !state.error && (
         <>
           <StatusHeader state={state} />
-          {state.candidates.length === 0 ? (
+          {state.risk_tier === "NO_POSITION" ? (
             <div
               className="rounded-lg border border-console-border bg-console-panel p-6 text-sm text-console-muted"
               data-testid="no-position-data"
@@ -207,7 +247,37 @@ export function Dashboard() {
                 ? `Working. Current step: ${state.stage ?? "starting"}...`
                 : "No position data yet."}
             </div>
+          ) : state.incident_state === "NO_ACTIVE_INCIDENT" ? (
+            // Aegis's differentiator (candidate actions, scores, why-this-
+            // was-chosen) only exists when there was something to decide
+            // between. A safe/no-debt position never had that decision to
+            // make, so this shows a clean, honest state instead of
+            // fabricating candidates or claiming an incident was resolved.
+            <>
+              <div id="risk-overview">
+                <RiskPanel position={state.position} />
+              </div>
+              <div
+                className="rounded-lg border border-risk-safe/40 bg-risk-safe/5 p-6"
+                data-testid="safe-no-incident-panel"
+              >
+                <div className="text-sm font-semibold uppercase tracking-widest text-risk-safe">
+                  {state.no_debt ? "Safe. No outstanding debt." : "Safe."}
+                </div>
+                <p className="mt-2 text-sm text-console-muted">
+                  No intervention required. Aegis is monitoring this position.
+                </p>
+              </div>
+              {state.audit_timeline.length > 0 && (
+                <div id="audit-timeline">
+                  <AuditTimeline events={state.audit_timeline} />
+                </div>
+              )}
+            </>
           ) : (
+            // An incident exists (or existed): show the full execution-aware
+            // flow — current risk, actions considered, the selection Aegis
+            // made and why, the KeeperHub execution, and verification.
             <>
               <div id="risk-overview">
                 <RiskPanel position={state.position} />

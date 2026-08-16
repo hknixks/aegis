@@ -1,13 +1,28 @@
 "use client";
 
-import { useConnectedWallet } from "@/lib/wallet";
-
-// Connecting a wallet here only shows its address. It never signs or
-// sends anything, and it does not change which wallet Aegis watches.
-// That wallet is set on the server and shown next to this button.
-export function ConnectWallet({ aegisWallet }: { aegisWallet?: string | null }) {
-  const { address, connecting, error, hasProvider, connect, disconnect } = useConnectedWallet();
-
+// Purely presentational — the actual wallet connection state lives in
+// Dashboard.tsx (via lib/wallet.ts's useConnectedWallet), which is also
+// what drives POST /api/runs's `wallet` field. This component only
+// renders that shared state and triggers connect/disconnect; it never
+// signs or sends anything, and never grants execution authority (see
+// lib/wallet.ts's docstring).
+export function ConnectWallet({
+  address,
+  connecting,
+  error,
+  hasProvider,
+  connect,
+  disconnect,
+  aegisWallet,
+}: {
+  address: string | null;
+  connecting: boolean;
+  error: string | null;
+  hasProvider: boolean;
+  connect: () => void;
+  disconnect: () => void;
+  aegisWallet?: string | null;
+}) {
   if (address) {
     const matches = aegisWallet ? address.toLowerCase() === aegisWallet.toLowerCase() : null;
     return (
@@ -17,7 +32,7 @@ export function ConnectWallet({ aegisWallet }: { aegisWallet?: string | null }) 
         </span>
         {matches === false && (
           <span className="text-xs text-risk-atrisk" data-testid="wallet-mismatch-note">
-            Aegis is watching a different wallet
+            Aegis is showing a different wallet's position
           </span>
         )}
         <button

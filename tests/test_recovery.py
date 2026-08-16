@@ -192,6 +192,40 @@ def test_all_candidates_fail_simulation_reaches_no_safe_action() -> None:
     parts["execution_service"].execute.assert_not_called()
 
 
+def test_connected_wallet_that_is_not_the_authorized_execution_wallet_never_executes() -> None:
+    """EXECUTION AUTHORITY guarantee: reading a position for a connected
+    USER WALLET must never imply Aegis can act on its behalf. Here the
+    position read as `user` is genuinely at risk and would simulate fine,
+    but `user` differs from settings.aegis_expected_wallet_address (the
+    KeeperHub-authorized execution wallet) — PolicyEngine's own wallet-pin
+    check (aegis.policy) must reject every candidate that would move
+    funds, leaving only DO_NOTHING, so the run ends NO_SAFE_ACTION and the
+    execution service is never called. No new logic under test here; this
+    proves the existing wallet-pin check is what a connected wallet
+    actually goes through end to end."""
+    settings = _settings()  # aegis_expected_wallet_address=USER, i.e. "0xWallet"
+    connected_wallet = "0xConnectedButNotAuthorized00000000000"
+
+    audit = AuditLogger()
+    parts = _parts(settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_always_passes)
+
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=connected_wallet,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, **parts,
+    )
+
+    assert result.final_state is RunState.NO_SAFE_ACTION
+    assert result.executed is False
+    assert result.selected is not None
+    assert result.selected.decision is Decision.DO_NOTHING
+    for candidate in result.candidates:
+        if candidate.decision is Decision.DO_NOTHING:
+            continue
+        assert candidate.eligible is False
+        assert candidate.rejection_reason is not None and "wallet" in candidate.rejection_reason.lower()
+    parts["execution_service"].execute.assert_not_called()
+
+
 def test_safe_position_resolves_via_do_nothing_without_simulating() -> None:
     settings = _settings()
     audit = AuditLogger()

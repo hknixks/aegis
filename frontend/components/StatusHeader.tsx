@@ -10,6 +10,46 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
+// Four distinct concepts, each shown on its own — never collapsed into a
+// single "Resolved". See aegis.api._system_status/_incident_state/
+// _run_state for the backend source of truth these mirror verbatim.
+const INCIDENT_META: Record<string, string> = {
+  NO_ACTIVE_INCIDENT: "text-console-muted border-console-border",
+  ACTIVE: "text-risk-atrisk border-risk-atrisk/40",
+  RECOVERING: "text-risk-atrisk border-risk-atrisk/40",
+  RESOLVED: "text-risk-safe border-risk-safe/40",
+  FAILED: "text-risk-critical border-risk-critical/40",
+  UNCERTAIN: "text-risk-high border-risk-high/40",
+};
+
+const RUN_META: Record<string, string> = {
+  RUNNING: "text-risk-atrisk border-risk-atrisk/40",
+  DRY_RUN_COMPLETE: "text-console-muted border-console-border",
+  EXECUTION_COMPLETE: "text-risk-safe border-risk-safe/40",
+  FAILED: "text-risk-critical border-risk-critical/40",
+  STOPPED: "text-console-muted border-console-border",
+};
+
+function StatePill({
+  value,
+  palette,
+  testId,
+}: {
+  value: string;
+  palette: Record<string, string>;
+  testId?: string;
+}) {
+  const className = palette[value] ?? "text-console-muted border-console-border";
+  return (
+    <span
+      className={`inline-flex w-fit items-center rounded border px-2 py-0.5 font-mono text-sm font-semibold uppercase tracking-wide ${className}`}
+      data-testid={testId}
+    >
+      {value.replace(/_/g, " ")}
+    </span>
+  );
+}
+
 export function StatusHeader({ state }: { state: DashboardState }) {
   return (
     <header
@@ -25,8 +65,20 @@ export function StatusHeader({ state }: { state: DashboardState }) {
           {state.status}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-7">
-        <Field label="Status" value={state.status} />
+
+      {/* The four separated states, each its own field — this is the fix
+          for collapsing everything into a single "Resolved" label. */}
+      <div className="mb-6 grid grid-cols-2 gap-4 border-b border-console-border pb-6 sm:grid-cols-4" data-testid="state-rows">
+        <Field label="System" value={<StatePill value={state.system_status} palette={{}} testId="system-status-value" />} />
+        <Field label="Position" value={<RiskBadge tier={state.risk_tier} />} />
+        <Field
+          label="Incident"
+          value={<StatePill value={state.incident_state} palette={INCIDENT_META} testId="incident-state-value" />}
+        />
+        <Field label="Run" value={<StatePill value={state.run_state} palette={RUN_META} testId="run-state-value" />} />
+      </div>
+
+      <div className="grid grid-cols-2 gap-6 sm:grid-cols-3 lg:grid-cols-5">
         <Field label="Network" value={state.network === "84532" ? "Base Sepolia" : state.network} />
         <Field
           label="Wallet"
@@ -41,9 +93,15 @@ export function StatusHeader({ state }: { state: DashboardState }) {
           }
         />
         <Field label="Protocol" value={state.protocol} />
-        <Field label="Health Factor" value={state.health_factor ?? "N/A"} />
-        <Field label="Risk" value={<RiskBadge tier={state.risk_tier} />} />
-        <Field label="Incident" value={state.incident_state} />
+        <Field
+          label="Health Factor"
+          value={
+            <span data-testid="status-header-health-factor">
+              {state.no_debt ? "No debt" : state.health_factor ?? "N/A"}
+            </span>
+          }
+        />
+        <Field label="Risk Level" value={state.risk_level ?? "N/A"} />
       </div>
       <div className="mt-6 flex flex-wrap items-center gap-4 border-t border-console-border pt-4">
         <Field

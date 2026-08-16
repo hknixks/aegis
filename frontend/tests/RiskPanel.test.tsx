@@ -30,6 +30,7 @@ describe("RiskPanel — position risk states", () => {
         collateral: null,
         debt: null,
         health_factor: null,
+        no_debt: false,
         risk_level: null,
         risk_threshold: null,
         timestamp: null,
@@ -38,5 +39,66 @@ describe("RiskPanel — position risk states", () => {
     });
     render(<RiskPanel position={position} />);
     expect(screen.getByTestId("hf-gauge-empty")).toBeInTheDocument();
+  });
+
+  it("never shows the raw uint256-max sentinel — shows 'No debt' instead", () => {
+    const { position } = makeState({
+      position: {
+        collateral: "0",
+        debt: "0",
+        health_factor: null,
+        no_debt: true,
+        risk_level: "SAFE",
+        risk_threshold: "1.2",
+        timestamp: "2026-08-15T12:00:00Z",
+        last_update: "2026-08-15T12:00:00Z",
+      },
+    });
+    render(<RiskPanel position={position} />);
+
+    expect(screen.getByTestId("health-factor-value")).toHaveTextContent("No debt");
+    expect(screen.getByTestId("hf-gauge-no-debt")).toBeInTheDocument();
+    // no giant number anywhere in the rendered output
+    expect(document.body.textContent).not.toMatch(/\d{10,}/);
+  });
+
+  it("shows known-zero collateral and debt as $0, distinct from unknown", () => {
+    const { position } = makeState({
+      position: {
+        collateral: "0",
+        debt: "0",
+        health_factor: null,
+        no_debt: true,
+        risk_level: "SAFE",
+        risk_threshold: "1.2",
+        timestamp: "2026-08-15T12:00:00Z",
+        last_update: "2026-08-15T12:00:00Z",
+      },
+    });
+    render(<RiskPanel position={position} />);
+
+    const zeros = screen.getAllByText("$0");
+    expect(zeros).toHaveLength(2);
+    expect(screen.queryByText(/unknown/i)).not.toBeInTheDocument();
+  });
+
+  it("shows unknown collateral and debt distinctly from known-zero", () => {
+    const { position } = makeState({
+      position: {
+        collateral: null,
+        debt: null,
+        health_factor: null,
+        no_debt: false,
+        risk_level: null,
+        risk_threshold: null,
+        timestamp: null,
+        last_update: null,
+      },
+    });
+    render(<RiskPanel position={position} />);
+
+    const unknowns = screen.getAllByText("Unknown");
+    expect(unknowns).toHaveLength(2);
+    expect(screen.queryByText("$0")).not.toBeInTheDocument();
   });
 });

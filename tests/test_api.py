@@ -46,7 +46,10 @@ def test_fixture_run_resolves_with_the_full_narrative() -> None:
     assert data["run_id"] == run_id
     assert data["running"] is False
     assert data["status"] == "Resolved"
-    assert data["incident_state"] == "Resolved"
+    assert data["incident_state"] == "RESOLVED"
+    assert data["system_status"] == "MONITORING"
+    assert data["run_state"] == "DRY_RUN_COMPLETE"
+    assert data["no_debt"] is False
     assert data["network"] == "84532"
     assert data["chain_id"] == 84532
     assert data["protocol"] == "Aave V3"
@@ -138,6 +141,106 @@ def test_live_dry_run_reports_structured_error_when_not_configured(monkeypatch) 
 
     assert response.status_code == 400
     assert "not configured" in response.json()["detail"]
+
+
+def test_start_run_rejects_a_malformed_wallet_address() -> None:
+    response = client.post(
+        "/api/runs",
+        json={"mode": "fixture", "wallet": {"address": "not-an-address", "chain": "84532", "connected": True}},
+    )
+    assert response.status_code == 422
+
+
+def test_fixture_ignores_a_connected_wallet_and_reports_wallet_source_fixture() -> None:
+    """FIXTURE's position data is entirely canned — see
+    aegis.demo_orchestrator.start_run's FIXTURE branch — so a connected
+    wallet must never be paired with fabricated numbers under its own
+    address; the wallet_source label makes this explicit to the frontend."""
+    response = client.post(
+        "/api/runs",
+        json={
+            "mode": "fixture",
+            "wallet": {"address": "0xAbC1230000000000000000000000000000dEf9AB", "chain": "84532", "connected": True},
+        },
+    )
+    assert response.status_code == 200
+    data = _poll_until_done(response.json()["run_id"])
+    assert data["wallet_source"] == "fixture"
+    assert data["wallet"] != "0xAbC1230000000000000000000000000000dEf9AB"
+
+
+def test_live_dry_run_uses_the_connected_wallet_and_reports_its_source(monkeypatch) -> None:
+    from aegis.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEEPERHUB_API_KEY", "kh_test123")
+    monkeypatch.setenv("AEGIS_EXPECTED_WALLET_ADDRESS", "0xDevDefaultWallet00000000000000000000")
+    monkeypatch.setenv("AEGIS_DEBT_ASSET", "0xUSDC")
+    monkeypatch.setenv("AEGIS_COLLATERAL_ASSET", "0xWETH")
+    monkeypatch.setenv("KEEPERHUB_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("KEEPERHUB_TIMEOUT_SECONDS", "1")
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "mode": "live_dry_run",
+            "wallet": {"address": "0xAbC1230000000000000000000000000000dEf9AB", "chain": "84532", "connected": True},
+        },
+    )
+    assert response.status_code == 200
+    data = _poll_until_done(response.json()["run_id"], timeout=15.0)
+    get_settings.cache_clear()
+
+    # Resolved and reported before the (failing, unreachable-KeeperHub)
+    # position read ever happens — the connected wallet wins, never the
+    # dev-default env var.
+    assert data["wallet"] == "0xAbC1230000000000000000000000000000dEf9AB"
+    assert data["wallet_source"] == "connected"
+
+
+def test_live_dry_run_falls_back_to_dev_default_when_no_wallet_is_connected(monkeypatch) -> None:
+    from aegis.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEEPERHUB_API_KEY", "kh_test123")
+    monkeypatch.setenv("AEGIS_EXPECTED_WALLET_ADDRESS", "0xDevDefaultWallet00000000000000000000")
+    monkeypatch.setenv("AEGIS_DEBT_ASSET", "0xUSDC")
+    monkeypatch.setenv("AEGIS_COLLATERAL_ASSET", "0xWETH")
+    monkeypatch.setenv("KEEPERHUB_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("KEEPERHUB_TIMEOUT_SECONDS", "1")
+
+    run_id = _start("live_dry_run")
+    data = _poll_until_done(run_id, timeout=15.0)
+    get_settings.cache_clear()
+
+    assert data["wallet"] == "0xDevDefaultWallet00000000000000000000"
+    assert data["wallet_source"] == "dev_default"
+
+
+def test_live_dry_run_works_for_a_connected_wallet_with_no_dev_default_configured(monkeypatch) -> None:
+    """The actual "usable by ANY user" guarantee at the HTTP layer: a
+    deployment with no AEGIS_EXPECTED_WALLET_ADDRESS configured at all
+    must still start a run for whoever connects a wallet."""
+    from aegis.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("KEEPERHUB_API_KEY", "kh_test123")
+    monkeypatch.setenv("AEGIS_EXPECTED_WALLET_ADDRESS", "")
+    monkeypatch.setenv("AEGIS_DEBT_ASSET", "0xUSDC")
+    monkeypatch.setenv("AEGIS_COLLATERAL_ASSET", "0xWETH")
+    monkeypatch.setenv("KEEPERHUB_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("KEEPERHUB_TIMEOUT_SECONDS", "1")
+
+    response = client.post(
+        "/api/runs",
+        json={
+            "mode": "live_dry_run",
+            "wallet": {"address": "0xAbC1230000000000000000000000000000dEf9AB", "chain": "84532", "connected": True},
+        },
+    )
+    get_settings.cache_clear()
+
+    assert response.status_code == 200
 
 
 def test_live_dry_run_never_exposes_the_api_key_even_on_error(monkeypatch) -> None:

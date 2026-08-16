@@ -57,6 +57,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from typing import Literal
 from unittest.mock import MagicMock
 
 from aegis.aave import AaveUserAccountData
@@ -108,6 +109,14 @@ class RunHandle:
     network: str
     wallet: str | None
     started_at: datetime
+    # Where `wallet` actually came from — never inferred by the frontend,
+    # always reported straight from here. "connected": a browser wallet's
+    # own address, passed in by the caller of start_run. "dev_default":
+    # settings.aegis_expected_wallet_address, used because no wallet was
+    # connected. "fixture": FIXTURE mode's canned demo wallet, which is
+    # never affected by a connected wallet at all (see start_run's FIXTURE
+    # branch) since its position data is entirely mocked either way.
+    wallet_source: Literal["connected", "dev_default", "fixture"] = "dev_default"
     completed_at: datetime | None = None
     result: PipelineResult | None = None
     error: str | None = None
@@ -230,10 +239,18 @@ def build_fixture_components(settings: Settings) -> PipelineComponents:
 # --- shared gates -----------------------------------------------------
 
 
-def _require_live_config(settings: Settings) -> None:
-    if not (settings.aegis_expected_wallet_address and settings.aegis_debt_asset and settings.aegis_collateral_asset):
+def _require_live_config(settings: Settings, user: str | None) -> None:
+    """`user` is whatever start_run already resolved (a connected wallet's
+    address, or settings.aegis_expected_wallet_address as a fallback) —
+    checked here rather than re-reading the settings field directly, so a
+    caller who *did* pass a connected wallet isn't blocked by an unset
+    AEGIS_EXPECTED_WALLET_ADDRESS. debt_asset/collateral_asset are project-
+    wide scope config (which assets Aegis knows how to act on), unrelated
+    to whose wallet is being read, and still required either way."""
+    if not (user and settings.aegis_debt_asset and settings.aegis_collateral_asset):
         raise LiveConfigMissingError(
-            "AEGIS_EXPECTED_WALLET_ADDRESS / AEGIS_DEBT_ASSET / AEGIS_COLLATERAL_ASSET not configured"
+            "a wallet to monitor (connect one, or set AEGIS_EXPECTED_WALLET_ADDRESS) / "
+            "AEGIS_DEBT_ASSET / AEGIS_COLLATERAL_ASSET not configured"
         )
 
 
@@ -290,20 +307,36 @@ def start_run(
     settings: Settings | None = None,
     confirm: bool = False,
     preflight_result: PreflightResult | None = None,
+    wallet_address: str | None = None,
 ) -> RunHandle:
     """The single path every CLI command and API endpoint uses to start an
     Aegis run. Raises DemoOrchestrationError (never starts a thread, never
     registers a handle) if the requested mode's preconditions aren't met —
-    a run_id is only ever handed back once a run has actually begun."""
+    a run_id is only ever handed back once a run has actually begun.
+
+    `wallet_address` is the USER WALLET to read a position for — normally
+    a browser-connected wallet's own address, passed through by aegis.api.
+    It is never an execution identity: whatever address is read here still
+    has to pass PolicyEngine's own wallet-pin check
+    (Settings.aegis_expected_wallet_address) before anything can ever be
+    executed on its behalf, and LIVE_DRY_RUN's dry_run=True override below
+    means no execution is reachable through this mode regardless. FIXTURE
+    mode ignores it entirely — its position data is canned/mocked no
+    matter which address is passed, so honoring a real connected wallet
+    there would just pair a real address with fabricated numbers.
+    """
     if mode is DemoMode.FIXTURE:
         run_settings = fixture_settings()
         components = build_fixture_components(run_settings)
         dry_run = False  # safe: components' services are MagicMocks, never a real client — see build_fixture_components
         network, user = FIXTURE_NETWORK, FIXTURE_WALLET
+        wallet_source: Literal["connected", "dev_default", "fixture"] = "fixture"
         debt_asset, collateral_asset = FIXTURE_DEBT_ASSET, FIXTURE_COLLATERAL_ASSET
     elif mode is DemoMode.LIVE_DRY_RUN:
         run_settings = settings or get_settings()
-        _require_live_config(run_settings)
+        user = wallet_address or run_settings.aegis_expected_wallet_address
+        wallet_source = "connected" if wallet_address else "dev_default"
+        _require_live_config(run_settings, user)
         if BASE_SEPOLIA_CHAIN_ID not in run_settings.aegis_allowed_chain_ids:
             raise LiveConfigMissingError(
                 f"chain ID {BASE_SEPOLIA_CHAIN_ID} (Base Sepolia) is not in AEGIS_ALLOWED_CHAIN_IDS="
@@ -312,16 +345,16 @@ def start_run(
         components = build_pipeline_components(run_settings, hermes_agent=_maybe_build_hermes_agent(run_settings))
         dry_run = True  # structural override — aegis.pipeline.run_pipeline never reaches EXECUTE under this
         network = str(BASE_SEPOLIA_CHAIN_ID)
-        user = run_settings.aegis_expected_wallet_address
         debt_asset, collateral_asset = run_settings.aegis_debt_asset, run_settings.aegis_collateral_asset
     elif mode is DemoMode.LIVE_EXECUTION:
         run_settings = settings or get_settings()
-        _require_live_config(run_settings)
+        user = wallet_address or run_settings.aegis_expected_wallet_address
+        wallet_source = "connected" if wallet_address else "dev_default"
+        _require_live_config(run_settings, user)
         _authorize_live_execution(run_settings, confirm=confirm, preflight_result=preflight_result)
         components = build_pipeline_components(run_settings, hermes_agent=_maybe_build_hermes_agent(run_settings))
         dry_run = False
         network = str(BASE_SEPOLIA_CHAIN_ID)
-        user = run_settings.aegis_expected_wallet_address
         debt_asset, collateral_asset = run_settings.aegis_debt_asset, run_settings.aegis_collateral_asset
     else:
         raise ValueError(f"unknown demo mode {mode!r}")
@@ -329,7 +362,7 @@ def start_run(
     run_id = str(uuid.uuid4())
     audit = AuditLogger(path=run_settings.aegis_audit_log_path)
     handle = RunHandle(
-        run_id=run_id, mode=mode, audit=audit, network=network, wallet=user,
+        run_id=run_id, mode=mode, audit=audit, network=network, wallet=user, wallet_source=wallet_source,
         started_at=datetime.now(timezone.utc),
     )
 

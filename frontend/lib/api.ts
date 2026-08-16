@@ -1,4 +1,4 @@
-import type { DashboardState, StartRunMode } from "./types";
+import type { DashboardState, StartRunMode, UserWallet } from "./types";
 
 // The ONLY server this dashboard ever talks to. It is aegis.api's
 // read-only FastAPI backend — never KeeperHub, never a blockchain RPC
@@ -12,13 +12,20 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_AEGIS_API_URL || "http://localhost:
 
 export class AegisApiError extends Error {}
 
-export async function startRun(mode: StartRunMode, signal?: AbortSignal): Promise<string> {
+export async function startRun(
+  mode: StartRunMode,
+  wallet?: UserWallet | null,
+  signal?: AbortSignal
+): Promise<string> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/api/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode }),
+      // wallet is omitted (not just null) when nothing is connected, or
+      // for FIXTURE mode, which ignores it either way — see
+      // aegis.demo_orchestrator.start_run's FIXTURE branch.
+      body: JSON.stringify(wallet && wallet.connected ? { mode, wallet } : { mode }),
       signal,
       cache: "no-store",
     });
