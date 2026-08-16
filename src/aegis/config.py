@@ -135,6 +135,16 @@ class Settings(BaseSettings):
         default="claude-sonnet-5",
         description="Anthropic model id Hermes uses for READ/ANALYZE/DECIDE.",
     )
+    aegis_hermes_enabled: bool = Field(
+        default=False,
+        description=(
+            "Opt-in switch for consulting Hermes during LIVE_DRY_RUN/LIVE_EXECUTION runs "
+            "(aegis.demo_orchestrator). False by default: candidate generation stays purely "
+            "deterministic unless this AND anthropic_api_key are both set. Hermes's proposal, "
+            "when consulted, is scored and gated identically to every other candidate — this "
+            "flag only controls whether it's consulted at all, never any safety check on it."
+        ),
+    )
     aegis_autonomous_execution_enabled: bool = Field(
         default=False,
         description=(

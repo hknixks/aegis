@@ -18,10 +18,18 @@ whole run — nothing about them is reimplemented here):
          -> SELECT BEST EXECUTABLE ACTION -> POLICY CHECK -> EXECUTE
          -> VERIFY -> REASSESS RISK
 
-No LLM is anywhere in this call path. Every score is a plain, deterministic
-function of observable data (position numbers, PolicyEngine's own
-allowlists, and KeeperHub's own simulation response) — nothing here is
-invented by a model, and nothing here can be talked out of a policy limit.
+Every score is a plain, deterministic function of observable data (position
+numbers, PolicyEngine's own allowlists, and KeeperHub's own simulation
+response) — nothing here is invented by a model, and nothing here can be
+talked out of a policy limit. aegis.recovery.run_with_recovery may append
+one additional candidate built from Hermes's proposed Intent (see
+build_hermes_candidate below) to the list this module scores — but every
+function in this module treats it identically to a deterministically
+generated one: same financial/execution formulas, same mandatory
+simulation, same PolicyEngine gate, no privilege and no shortcut. Nothing
+in THIS module's scoring, selection, or explanation logic is influenced by
+an LLM; a candidate merely originating from one carries no special
+treatment once it's in this list.
 
 Units note: Aave V3's totalCollateralBase/totalDebtBase are both expressed
 in the same protocol-defined base currency, so their ratio (health factor)
@@ -266,6 +274,11 @@ class CandidateAction(BaseModel):
     final_status: CandidateFinalStatus | None = None
 
     rationale: str = ""
+    # "decision_engine" (default) for every deterministically generated
+    # candidate; "hermes" for the one build_hermes_candidate produces.
+    # Audit/dashboard-only — never read by any scoring, policy, or
+    # execution logic, so it cannot itself grant or withhold eligibility.
+    source: str = "decision_engine"
 
     @property
     def protocol_action(self) -> str | None:
@@ -304,7 +317,7 @@ def candidate_to_intent(candidate: CandidateAction) -> Intent:
         amount=candidate.amount,
         on_behalf_of=candidate.on_behalf_of,
         rationale=candidate.rationale,
-        source="execution_aware_decision_engine",
+        source="hermes" if candidate.source == "hermes" else "execution_aware_decision_engine",
     )
 
 
@@ -441,6 +454,69 @@ def generate_candidate_actions(
         )
 
     return candidates
+
+
+def build_hermes_candidate(
+    intent: Intent,
+    position: AaveUserAccountData,
+    risk: RiskAssessment,
+    *,
+    network: str,
+    user: str,
+    debt_asset: str,
+    collateral_asset: str,
+) -> CandidateAction | None:
+    """Converts Hermes's proposed Intent into a CandidateAction that
+    competes in generate_candidate_actions' own list on equal terms —
+    scored by the exact same compute_financial_score/compute_execution_score
+    formulas, subject to the exact same mandatory simulation and
+    PolicyEngine gate. Hermes's proposal gets no privilege: if it's
+    reckless or wrong, it is scored and rejected exactly like a
+    deterministic candidate would be for the same flaw.
+
+    Only `decision`, `amount`, and `rationale` are taken from the Intent
+    itself — network/wallet/asset are always the run's own known values
+    (matching what the deterministic candidates use), never whatever
+    Hermes said, so a hallucinated address can't even reach a candidate,
+    let alone execution. (PolicyEngine independently re-validates all of
+    this regardless — this is defense in depth, not the only guard.)
+
+    Returns None for DO_NOTHING (already always present via
+    generate_candidate_actions) or an unusable amount (missing, not a
+    valid decimal, or <= 0) — never fabricates a fallback amount.
+    """
+    if intent.decision is Decision.DO_NOTHING:
+        return None
+    if not intent.amount:
+        return None
+    try:
+        amount = Decimal(intent.amount)
+    except InvalidOperation:
+        return None
+    if amount <= 0:
+        return None
+
+    # Same base-currency-scaled human-units convention the deterministic
+    # candidates use (see this module's docstring) — inherits the same
+    # documented no-decimals-conversion limitation, not a new one.
+    raw_amount = amount * _BASE_CURRENCY_SCALE
+    projected = _projected_health_factor(position, intent.decision, raw_amount)
+    action = "repay" if intent.decision is Decision.REPAY_DEBT else "supply"
+    asset = debt_asset if intent.decision is Decision.REPAY_DEBT else collateral_asset
+
+    return CandidateAction(
+        decision=intent.decision,
+        protocol="aave-v3",
+        action=action,
+        asset=asset,
+        amount=str(amount),
+        network=network,
+        on_behalf_of=user,
+        expected_risk_reduction=projected - risk.health_factor,
+        capital_cost=amount,
+        rationale=intent.rationale,
+        source="hermes",
+    )
 
 
 def compute_financial_score(candidate: CandidateAction, position: AaveUserAccountData) -> FinancialScore:

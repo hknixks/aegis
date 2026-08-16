@@ -52,6 +52,7 @@ dashboard API server) via `aegis.audit.load_events_for_run`.
 from __future__ import annotations
 
 import threading
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -61,10 +62,13 @@ from unittest.mock import MagicMock
 from aegis.aave import AaveUserAccountData
 from aegis.audit import AuditLogger
 from aegis.config import Settings, get_settings
+from aegis.hermes.runtime import HermesAgent
 from aegis.keeperhub.models import ExecutionStatus, ProtocolActionExecution, ProtocolActionSimulation
 from aegis.pipeline import PipelineComponents, PipelineResult, build_pipeline_components, run_pipeline
 from aegis.policy import PolicyEngine
 from aegis.preflight import BASE_SEPOLIA_CHAIN_ID, PreflightResult, run_preflight
+
+logger = logging.getLogger(__name__)
 
 
 class DemoMode(str, Enum):
@@ -253,6 +257,30 @@ def _authorize_live_execution(
         raise LiveExecutionNotAuthorizedError(reasons)
 
 
+def _maybe_build_hermes_agent(settings: Settings) -> HermesAgent | None:
+    """Constructs a real Hermes agent for LIVE_DRY_RUN/LIVE_EXECUTION when
+    both settings.aegis_hermes_enabled and anthropic_api_key are set — off
+    (None) by default, which is the unchanged, deterministic-only
+    behavior. Construction failure (package not installed, KeeperHub MCP
+    unreachable, bad API key) is caught and logged, never raised: Hermes
+    is an optional enhancement to candidate generation, not a
+    precondition for a live run — see aegis.recovery._consult_hermes for
+    the same guarantee at call time."""
+    if not (settings.aegis_hermes_enabled and settings.anthropic_api_key):
+        return None
+    try:
+        from aegis.hermes.mcp_gateway import HermesMcpGateway, create_default_session
+        from aegis.hermes.runtime import AnthropicLlmClient
+
+        session = create_default_session(settings)
+        gateway = HermesMcpGateway(session, settings)
+        llm_client = AnthropicLlmClient(settings)
+        return HermesAgent(llm_client, gateway)
+    except Exception as exc:  # noqa: BLE001 - never blocks a live run; see docstring
+        logger.warning("Hermes agent could not be constructed, continuing without it: %s", exc)
+        return None
+
+
 # --- the one authoritative entrypoint ----------------------------------
 
 
@@ -281,7 +309,7 @@ def start_run(
                 f"chain ID {BASE_SEPOLIA_CHAIN_ID} (Base Sepolia) is not in AEGIS_ALLOWED_CHAIN_IDS="
                 f"{sorted(run_settings.aegis_allowed_chain_ids)} — this project's demo is Base Sepolia only"
             )
-        components = build_pipeline_components(run_settings)
+        components = build_pipeline_components(run_settings, hermes_agent=_maybe_build_hermes_agent(run_settings))
         dry_run = True  # structural override — aegis.pipeline.run_pipeline never reaches EXECUTE under this
         network = str(BASE_SEPOLIA_CHAIN_ID)
         user = run_settings.aegis_expected_wallet_address
@@ -290,7 +318,7 @@ def start_run(
         run_settings = settings or get_settings()
         _require_live_config(run_settings)
         _authorize_live_execution(run_settings, confirm=confirm, preflight_result=preflight_result)
-        components = build_pipeline_components(run_settings)
+        components = build_pipeline_components(run_settings, hermes_agent=_maybe_build_hermes_agent(run_settings))
         dry_run = False
         network = str(BASE_SEPOLIA_CHAIN_ID)
         user = run_settings.aegis_expected_wallet_address

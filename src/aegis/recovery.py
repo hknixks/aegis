@@ -76,6 +76,7 @@ from aegis.decision_engine import (
     CandidateAction,
     apply_final_status,
     build_explanation,
+    build_hermes_candidate,
     candidate_to_intent,
     compute_combined_score,
     compute_execution_score,
@@ -85,6 +86,7 @@ from aegis.decision_engine import (
     generate_candidate_actions,
 )
 from aegis.execution import ExecutionService, SimulationService, VerificationService, VerificationTimeoutError
+from aegis.hermes.runtime import HermesAgent
 from aegis.intents import Decision
 from aegis.keeperhub.models import ExecutionStatus, ProtocolActionSimulation
 from aegis.policy import PolicyDecision, PolicyEngine
@@ -357,6 +359,63 @@ def _resume_from_prior_execution(
     )
 
 
+def _consult_hermes(
+    hermes_agent: HermesAgent,
+    position: AaveUserAccountData,
+    risk: RiskAssessment,
+    *,
+    network: str,
+    user: str,
+    debt_asset: str,
+    collateral_asset: str,
+    audit: AuditLogger,
+    run_id: str,
+) -> CandidateAction | None:
+    """Hermes is an optional enhancement to candidate generation, never a
+    dependency of it — a flaky LLM call, an unreachable KeeperHub MCP
+    session, or a malformed response must never break, delay past its own
+    call, or block the deterministic path that runs regardless. Any
+    failure here is caught, recorded, and treated as "Hermes had nothing
+    to add this round" — generate_candidate_actions' own deterministic
+    candidates are unaffected either way."""
+    position_summary: dict[str, object] = {
+        "network": network,
+        "user": user,
+        "protocol": "aave-v3",
+        "healthFactor": position.healthFactor,
+        "totalCollateralBase": position.totalCollateralBase,
+        "totalDebtBase": position.totalDebtBase,
+        "availableBorrowsBase": position.availableBorrowsBase,
+        "currentLiquidationThreshold": position.currentLiquidationThreshold,
+        "ltv": position.ltv,
+        "riskLevel": risk.level.value,
+        "healthFactorThreshold": str(risk.threshold),
+        "debtAsset": debt_asset,
+        "collateralAsset": collateral_asset,
+    }
+    try:
+        intent = hermes_agent.decide(position_summary)
+    except Exception as exc:  # noqa: BLE001 - see docstring; covers HermesDidNotDecideError too
+        _log(
+            audit, run_id, "HERMES_CONSULTED",
+            recovery_decision=f"Hermes unavailable or did not decide: {type(exc).__name__}: {exc}",
+        )
+        return None
+
+    candidate = build_hermes_candidate(
+        intent, position, risk, network=network, user=user,
+        debt_asset=debt_asset, collateral_asset=collateral_asset,
+    )
+    _log(
+        audit, run_id, "HERMES_CONSULTED", candidate=candidate,
+        recovery_decision=(
+            f"Hermes proposed {intent.decision.value}"
+            + (f" (added as a candidate, amount={candidate.amount})" if candidate is not None else " (no candidate added)")
+        ),
+    )
+    return candidate
+
+
 def run_with_recovery(
     *,
     settings: Settings,
@@ -372,6 +431,7 @@ def run_with_recovery(
     collateral_asset: str,
     available_balance: Decimal | None = None,
     run_id: str | None = None,
+    hermes_agent: HermesAgent | None = None,
 ) -> RecoveryRunResult:
     run_id = run_id or str(uuid.uuid4())
 
@@ -412,6 +472,13 @@ def run_with_recovery(
     candidates = generate_candidate_actions(
         position, risk, network=network, user=user, debt_asset=debt_asset, collateral_asset=collateral_asset,
     )
+    if hermes_agent is not None:
+        hermes_candidate = _consult_hermes(
+            hermes_agent, position, risk, network=network, user=user,
+            debt_asset=debt_asset, collateral_asset=collateral_asset, audit=audit, run_id=run_id,
+        )
+        if hermes_candidate is not None:
+            candidates.append(hermes_candidate)
     recovery_attempts: list[CandidateAction] = []
     for candidate in candidates:
         financial = compute_financial_score(candidate, position)

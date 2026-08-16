@@ -165,3 +165,30 @@ def test_registry_lookup_returns_the_right_handle() -> None:
     handle = start_run(DemoMode.FIXTURE)
     assert get_run(handle.run_id) is handle
     assert get_run("not-a-real-run-id") is None
+
+
+# --- Hermes: opt-in, never on by default, never in FIXTURE mode ------------
+
+
+def test_hermes_agent_is_none_by_default() -> None:
+    from aegis.demo_orchestrator import _maybe_build_hermes_agent
+
+    settings = _live_settings()  # aegis_hermes_enabled defaults to False
+    assert _maybe_build_hermes_agent(settings) is None
+
+
+def test_hermes_agent_is_none_without_anthropic_api_key_even_if_enabled() -> None:
+    from aegis.demo_orchestrator import _maybe_build_hermes_agent
+
+    settings = _live_settings(aegis_hermes_enabled=True)  # no anthropic_api_key
+    assert _maybe_build_hermes_agent(settings) is None
+
+
+def test_fixture_mode_never_gets_a_hermes_agent_regardless_of_settings() -> None:
+    """FIXTURE mode's components are built from fixture_settings() (fixed,
+    Hermes-disabled) regardless of what the operator's real environment
+    has configured — the canned presentation story never depends on a
+    live LLM call."""
+    handle = start_run(DemoMode.FIXTURE)
+    assert handle.result is not None
+    assert not any(c.source == "hermes" for r in handle.result.rounds for c in r.candidates)

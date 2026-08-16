@@ -7,7 +7,7 @@ from aegis.aave import AaveUserAccountData
 from aegis.audit import AuditLogger
 from aegis.config import Settings
 from aegis.execution import VerificationTimeoutError
-from aegis.intents import Decision
+from aegis.intents import Decision, Intent
 from aegis.keeperhub.models import ExecutionStatus, ProtocolActionExecution, ProtocolActionSimulation
 from aegis.policy import PolicyDecision, PolicyEngine
 from aegis.recovery import (
@@ -518,3 +518,129 @@ def test_valid_state_transitions_are_accepted() -> None:
     state = transition(audit, "run-2", state, RunState.RESOLVED, stage="RESOLVED")
     assert state is RunState.RESOLVED
     assert len(audit.events_for("run-2")) == 8
+
+
+# --- 14: Hermes, when consulted, competes on equal terms --------------------
+
+
+class _FakeHermesAgent:
+    def __init__(self, intent: Intent | None = None, error: Exception | None = None) -> None:
+        self._intent = intent
+        self._error = error
+
+    def decide(self, position_summary: dict) -> Intent:
+        if self._error is not None:
+            raise self._error
+        assert self._intent is not None
+        return self._intent
+
+
+def test_hermes_candidate_is_added_scored_like_any_other() -> None:
+    hermes_intent = Intent(
+        decision=Decision.ADD_COLLATERAL, protocol_action="aave-v3/supply", network=NETWORK,
+        asset=COLLATERAL_ASSET, amount="12.5", on_behalf_of=USER, rationale="Hermes: add collateral",
+    )
+    hermes_agent = _FakeHermesAgent(intent=hermes_intent)
+    settings = _settings(aegis_autonomous_execution_enabled=True)
+    parts = _parts(
+        settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_always_passes,
+        account_data_after=MOCK_AAVE_ACCOUNT_DATA_SAFE,
+    )
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, hermes_agent=hermes_agent, **parts,
+    )
+
+    hermes_candidates = [c for c in result.candidates if c.source == "hermes"]
+    assert len(hermes_candidates) == 1
+    candidate = hermes_candidates[0]
+    assert candidate.decision == Decision.ADD_COLLATERAL
+    assert candidate.amount == "12.5"
+    assert candidate.on_behalf_of == USER  # the run's own wallet, never trusted from the Intent
+    # scored by the exact same pipeline as the deterministic candidates —
+    # never left out of financial/execution scoring.
+    assert candidate.financial_detail is not None
+    assert candidate.execution_detail is not None
+    assert any(e.stage == "HERMES_CONSULTED" for e in audit.events_for(result.run_id))
+
+
+def test_hermes_do_nothing_adds_no_extra_candidate() -> None:
+    hermes_agent = _FakeHermesAgent(intent=Intent(decision=Decision.DO_NOTHING, rationale="looks fine to me"))
+    settings = _settings(aegis_autonomous_execution_enabled=True)
+    parts = _parts(
+        settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_always_passes,
+        account_data_after=MOCK_AAVE_ACCOUNT_DATA_SAFE,
+    )
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, hermes_agent=hermes_agent, **parts,
+    )
+    assert not any(c.source == "hermes" for c in result.candidates)
+    assert any(e.stage == "HERMES_CONSULTED" for e in audit.events_for(result.run_id))
+
+
+def test_hermes_failure_never_breaks_the_run() -> None:
+    hermes_agent = _FakeHermesAgent(error=RuntimeError("LLM API down"))
+    settings = _settings(aegis_autonomous_execution_enabled=True)
+    parts = _parts(
+        settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_always_passes,
+        account_data_after=MOCK_AAVE_ACCOUNT_DATA_SAFE,
+    )
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, hermes_agent=hermes_agent, **parts,
+    )
+    assert result.final_state is RunState.RESOLVED  # deterministic candidates still resolve the run
+    assert not any(c.source == "hermes" for c in result.candidates)
+    hermes_events = [e for e in audit.events_for(result.run_id) if e.stage == "HERMES_CONSULTED"]
+    assert len(hermes_events) == 1
+    assert "RuntimeError" in hermes_events[0].detail["recovery_decision"]
+
+
+def test_no_hermes_agent_is_unchanged_behavior() -> None:
+    settings = _settings(aegis_autonomous_execution_enabled=True)
+    parts = _parts(
+        settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_always_passes,
+        account_data_after=MOCK_AAVE_ACCOUNT_DATA_SAFE,
+    )
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, **parts,
+    )
+    assert not any(c.source == "hermes" for c in result.candidates)
+    assert not any(e.stage == "HERMES_CONSULTED" for e in audit.events_for(result.run_id))
+
+
+def test_hermes_reckless_proposal_is_rejected_like_any_bad_candidate() -> None:
+    """A Hermes proposal that fails simulation gets zero execution score
+    and is never selected — no privilege, exactly like a deterministic
+    candidate would be for the same failure."""
+    hermes_intent = Intent(
+        decision=Decision.REPAY_DEBT, protocol_action="aave-v3/repay", network=NETWORK,
+        asset=DEBT_ASSET, amount="999999", on_behalf_of=USER, rationale="Hermes: repay a lot",
+    )
+    hermes_agent = _FakeHermesAgent(intent=hermes_intent)
+
+    def _repay_fails(protocol_action: str, params: dict) -> ProtocolActionSimulation:
+        if protocol_action == "aave-v3/repay":
+            return _sim(success=False, would_revert=True)
+        return _sim()
+
+    settings = _settings(aegis_autonomous_execution_enabled=True)
+    parts = _parts(
+        settings, MOCK_AAVE_ACCOUNT_DATA_AT_RISK, simulate_side_effect=_repay_fails,
+        account_data_after=MOCK_AAVE_ACCOUNT_DATA_SAFE,
+    )
+    audit = AuditLogger()
+    result = run_with_recovery(
+        settings=settings, audit=audit, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET, hermes_agent=hermes_agent, **parts,
+    )
+    assert result.selected is not None
+    assert result.selected.source != "hermes"
+    hermes_candidate = next(c for c in result.candidates if c.source == "hermes")
+    assert not hermes_candidate.eligible

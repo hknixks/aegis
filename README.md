@@ -101,15 +101,26 @@ idempotency, and a wallet Aegis never has to hold a key for — is. Aegis
 delegates that entire "last mile" to KeeperHub so its own code never has
 to become a wallet, a signer, or a broadcaster.
 
-**Today, the pipeline that actually runs (CLI and dashboard alike) scores
-and selects with a deterministic decision engine, not Hermes** — a
-deliberate choice, not a shortfall: everything from POLICY CHECK onward
-is plain, testable Python with no LLM anywhere in that call path, so
-nothing about whether a transaction is safe to send ever depends on
-trusting a model's judgment. Hermes is fully implemented and
-independently tested (`aegis.hermes`, `tests/hermes/`) as the
-LLM-driven analysis layer, and is the natural next integration point —
-see [Limitations](#limitations).
+**Hermes is wired into the live pipeline as an opt-in enhancement to
+candidate generation, never a dependency of it.** Set
+`AEGIS_HERMES_ENABLED=true` and `ANTHROPIC_API_KEY` and a LIVE_DRY_RUN or
+LIVE_EXECUTION run consults Hermes for its own READ → ANALYZE → DECIDE
+pass; its proposed `Intent` is converted into one additional candidate
+(`aegis.decision_engine.build_hermes_candidate`) that competes in the
+exact same list as the deterministic ones — scored by the identical
+financial/execution formulas, gated by the identical mandatory simulation
+and PolicyEngine check. Hermes's candidate gets **no privilege**: only
+`network`/wallet/`asset` come from the run's own known configuration,
+never from the model, so a hallucinated address can't even reach a
+candidate; a reckless proposal is rejected exactly like a bad
+deterministic one would be. If Hermes is disabled (the default), fails to
+construct, or its `.decide()` call errors or times out, the run proceeds
+on the deterministic candidates alone — Hermes is additive, never a
+single point of failure for whether Aegis can act. Everything from POLICY
+CHECK onward is still plain, testable Python with no LLM anywhere in that
+call path — nothing about whether a transaction is *safe to send* ever
+depends on trusting a model's judgment; Hermes only ever gets to propose
+*one more option*, on the same terms as everything else.
 
 ## Architecture
 
@@ -124,49 +135,56 @@ see [Limitations](#limitations).
                     │  (FastAPI/CLI)│   both thin callers of ONE orchestrator:
                     └───────┬───────┘   aegis.demo_orchestrator.start_run.
                             │
-              ┌─────────────┼─────────────┐
-              │             │             │
-      ┌───────▼──────┐      │     ┌───────▼────────┐
-      │    Hermes     │      │     │ Decision Engine │  Deterministic,
-      │ (LLM, reads   │      │     │ (aegis.decision_ │  wired into the
-      │  only, via    │      │     │    engine)        │  live pipeline.
-      │ HermesMcpGateway)    │     └───────┬────────┘  Scores + selects.
-      └───────────────┘      │             │
-      Independently tested;   │     ┌───────▼────────┐
-      not yet wired into      │     │ Policy Engine  │  Hard, deterministic
-      run_pipeline.           │     │ (aegis.policy)  │  gate. No LLM here.
-                              │     └───────┬────────┘
-                              │             │
-                              │     ┌───────▼────────┐
-                              │     │  Simulation    │  Must pass before
-                              │     │ (SimulationService)│ execution is even
-                              │     └───────┬────────┘  considered.
-                              │             │
-                              └─────►┌──────▼──────────┐
-                                     │   KeeperHub     │  The ONLY onchain
-                                     │  (REST + MCP)   │  execution layer.
-                                     └──────┬──────────┘
-                                            │
-                                     ┌──────▼──────────┐
-                                     │   Base Sepolia   │
-                                     └──────┬──────────┘
-                                            │
-                                     ┌──────▼──────────┐
-                                     │  Verification    │  Fresh onchain read,
-                                     │ (VerificationService)│ never assumed.
-                                     └──────┬──────────┘
-                                            │
-                                     ┌──────▼──────────┐
-                                     │   Audit Trail    │  Every stage, every
-                                     │  (aegis.audit)    │  score, every reason,
-                                     └──────┬──────────┘  one shared run_id.
-                                            │
-                                     back to Frontend (read-only, polled)
+                    ┌───────▼────────┐
+      Hermes ───────►│ Decision Engine │  Deterministic. Generates the
+      (LLM, reads    │ (aegis.decision_ │  candidate list and scores every
+      only, via      │    engine)        │  candidate — including Hermes's,
+      HermesMcpGateway)                  │  when opted in — by the exact
+      Opt-in (AEGIS_  └───────┬────────┘  same formulas. No privilege.
+      HERMES_ENABLED).        │
+      Proposes an Intent      │
+      → one additional        │
+      candidate; never a      │
+      direct execution path.  │
+                       ┌───────▼────────┐
+                       │ Policy Engine  │  Hard, deterministic
+                       │ (aegis.policy)  │  gate. No LLM here.
+                       └───────┬────────┘
+                               │
+                       ┌───────▼────────┐
+                       │  Simulation    │  Must pass before
+                       │ (SimulationService)│ execution is even
+                       └───────┬────────┘  considered.
+                               │
+                       ┌───────▼──────────┐
+                       │   KeeperHub     │  The ONLY onchain
+                       │  (REST + MCP)   │  execution layer.
+                       └──────┬──────────┘
+                              │
+                       ┌──────▼──────────┐
+                       │   Base Sepolia   │
+                       └──────┬──────────┘
+                              │
+                       ┌──────▼──────────┐
+                       │  Verification    │  Fresh onchain read,
+                       │ (VerificationService)│ never assumed.
+                       └──────┬──────────┘
+                              │
+                       ┌──────▼──────────┐
+                       │   Audit Trail    │  Every stage, every
+                       │  (aegis.audit)    │  score, every reason,
+                       └──────┬──────────┘  one shared run_id.
+                              │
+                       back to Frontend (read-only, polled)
 ```
 
 There is exactly one path from a decision to an onchain effect:
 `PolicyEngine → SimulationService → ExecutionService → KeeperHubClient →
-KeeperHub REST API`. The dashboard never touches that path either — it
+KeeperHub REST API`. Hermes, even when consulted, only ever reaches this
+path by first becoming one scored, gated candidate among others
+(`aegis.decision_engine.build_hermes_candidate` → the same candidate
+list) — it has no callable and no shortcut into `ExecutionService`. The
+dashboard never touches that path either — it
 only calls `aegis.demo_orchestrator.start_run` through two read-only/
 non-executing modes (`GET`/`POST /api/runs`, FIXTURE and LIVE_DRY_RUN
 only); there is no HTTP endpoint anywhere that can trigger a real
@@ -332,10 +350,12 @@ pip install -e ".[api]"     # the dashboard's FastAPI backend
 key (`kh_...`), never a private key. Run `aegis health` first — it checks
 KeeperHub reachability and authentication before you touch anything else.
 
-**Hermes setup** (optional — not required for the pipeline that actually
-runs today, see [Why KeeperHub](#why-keeperhub)): set `ANTHROPIC_API_KEY`
-and install the `hermes` extra to exercise `AnthropicLlmClient` +
-`HermesMcpGateway`'s real, read-only MCP session against KeeperHub.
+**Hermes setup** (optional — off by default, see
+[Why KeeperHub](#why-keeperhub)): install the `hermes` extra
+(`pip install -e ".[hermes]"`), set `ANTHROPIC_API_KEY`, and set
+`AEGIS_HERMES_ENABLED=true` to have LIVE_DRY_RUN/LIVE_EXECUTION runs
+consult `AnthropicLlmClient` + `HermesMcpGateway`'s real, read-only MCP
+session and add Hermes's proposal as one additional candidate.
 
 **Frontend setup**: `cd frontend && npm install`. The only backend
 contact point is `NEXT_PUBLIC_AEGIS_API_URL` (default
@@ -361,6 +381,7 @@ environment variables. The ones that matter most:
 | `AEGIS_AUTONOMOUS_EXECUTION_ENABLED` | Master switch. `false` by default — every run stops after simulation until this is explicitly `true`. |
 | `AEGIS_AUDIT_LOG_PATH` | JSON-lines audit file every run appends to (default `./aegis_runs.jsonl`); shared across processes so the dashboard can poll a CLI-started run. |
 | `ANTHROPIC_API_KEY` | Hermes's real LLM client. Never a KeeperHub or wallet credential. |
+| `AEGIS_HERMES_ENABLED` | Opt-in switch to consult Hermes during LIVE_DRY_RUN/LIVE_EXECUTION. `false` by default. Needs `ANTHROPIC_API_KEY` too. |
 | `NEXT_PUBLIC_AEGIS_API_URL` (frontend) | Plain URL to the Aegis backend. Never a secret. |
 
 No secret is defined in this README or committed to the repository —
@@ -414,13 +435,18 @@ aren't present.
 ## Limitations
 
 - **No live transaction executed yet.** See [Live Demo](#live-demo).
-- **Hermes is not wired into the live pipeline.** It is fully
-  implemented and independently tested, but `run_pipeline` (the CLI and
-  dashboard's shared entrypoint) scores and selects with the
-  deterministic `decision_engine`, not `HermesAgent`. Wiring Hermes's
-  `Intent` output into `run_with_recovery` is the natural next step —
-  everything downstream of an `Intent` (PolicyEngine, simulation,
-  execution, verification) is already protocol/decision-source-agnostic.
+- **Hermes's live consultation is untested against the real Anthropic
+  API and a real KeeperHub MCP session end to end** — `_maybe_build_hermes_agent`
+  and `_consult_hermes`'s failure handling are covered with fakes
+  (`tests/test_recovery.py`, `tests/test_demo_orchestrator.py`), and
+  `aegis.hermes` itself is independently tested against a fake LLM
+  client (`tests/hermes/`), but no test in this project has yet run a
+  real `AnthropicLlmClient.decide()` call. `AEGIS_HERMES_ENABLED`
+  defaults to `false` for this reason, among others.
+- **Amount-unit ambiguity is now shared by two sources.** Hermes's
+  proposed `amount` is treated with the same base-currency-scaled
+  human-units convention the deterministic candidates use (see the next
+  bullet) — it inherits, rather than introduces, that gap.
 - **No price oracle / per-asset decimals conversion.** Candidate amounts
   and capital costs are computed in Aave's base-currency units directly,
   not converted to a specific asset's native decimals — a real
@@ -447,9 +473,11 @@ aren't present.
 
 ## Future Work
 
-- Wire Hermes's `Intent` output into `run_with_recovery` as an
-  alternative to (or ensemble with) the deterministic decision engine.
-- Per-asset decimals conversion for real amounts.
+- Run a real, end-to-end `AEGIS_HERMES_ENABLED=true` session against the
+  live Anthropic API and a live KeeperHub MCP session (currently only
+  exercised with fakes).
+- Per-asset decimals conversion for real amounts (Hermes-proposed and
+  deterministic candidates alike).
 - Persist the run registry (replace in-memory `RunHandle` dict) so a
   dashboard restart doesn't lose in-flight run visibility.
 - Additional protocols/actions beyond Aave V3 repay/supply (Morpho,

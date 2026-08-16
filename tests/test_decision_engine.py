@@ -8,6 +8,7 @@ from aegis.decision_engine import (
     CandidateFinalStatus,
     ExecutionAwareDecisionEngine,
     SimulationStatus,
+    build_hermes_candidate,
     candidate_to_intent,
     compute_execution_score,
     compute_financial_score,
@@ -16,7 +17,7 @@ from aegis.decision_engine import (
     generate_candidate_actions,
     select_best_executable,
 )
-from aegis.intents import Decision
+from aegis.intents import Decision, Intent
 from aegis.keeperhub.models import ProtocolActionSimulation
 from aegis.policy import PolicyDecision, PolicyEngine
 from aegis.risk import assess_health_factor
@@ -443,3 +444,60 @@ def test_execution_score_can_override_a_higher_financial_score() -> None:
     assert weak_financial_strong_execution.combined_score > strong_financial_weak_execution.combined_score
 
 
+
+
+# --- build_hermes_candidate: Hermes's proposal competes on equal terms -----
+
+
+def test_build_hermes_candidate_maps_intent_to_a_scoreable_candidate() -> None:
+    settings = _settings()
+    position = _position(MOCK_AAVE_ACCOUNT_DATA_AT_RISK)
+    risk = _risk(settings, position)
+    intent = Intent(
+        decision=Decision.ADD_COLLATERAL, protocol_action="aave-v3/supply", network=NETWORK,
+        asset=COLLATERAL_ASSET, amount="7.5", on_behalf_of=USER, rationale="Hermes: add collateral",
+    )
+
+    candidate = build_hermes_candidate(
+        intent, position, risk, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET,
+    )
+
+    assert candidate is not None
+    assert candidate.source == "hermes"
+    assert candidate.decision is Decision.ADD_COLLATERAL
+    assert candidate.amount == "7.5"
+    assert candidate.asset == COLLATERAL_ASSET  # the run's own configured asset, not trusted from the Intent
+    assert candidate.network == NETWORK
+    assert candidate.on_behalf_of == USER
+    assert candidate.protocol_action == "aave-v3/supply"
+
+    # Scores like any other candidate — same deterministic formulas.
+    financial = compute_financial_score(candidate, position)
+    assert financial.capital_cost == Decimal("7.5")
+
+
+def test_build_hermes_candidate_returns_none_for_do_nothing() -> None:
+    settings = _settings()
+    position = _position(MOCK_AAVE_ACCOUNT_DATA_SAFE)
+    risk = _risk(settings, position)
+    intent = Intent(decision=Decision.DO_NOTHING, rationale="all good")
+
+    assert build_hermes_candidate(
+        intent, position, risk, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET,
+    ) is None
+
+
+def test_build_hermes_candidate_rejects_unusable_amount() -> None:
+    settings = _settings()
+    position = _position(MOCK_AAVE_ACCOUNT_DATA_AT_RISK)
+    risk = _risk(settings, position)
+    zero_amount_intent = Intent(
+        decision=Decision.REPAY_DEBT, protocol_action="aave-v3/repay", network=NETWORK,
+        asset=DEBT_ASSET, amount="0", on_behalf_of=USER, rationale="x",
+    )
+    assert build_hermes_candidate(
+        zero_amount_intent, position, risk, network=NETWORK, user=USER,
+        debt_asset=DEBT_ASSET, collateral_asset=COLLATERAL_ASSET,
+    ) is None

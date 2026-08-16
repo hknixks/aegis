@@ -68,6 +68,7 @@ from aegis.aave import AavePositionReader
 from aegis.audit import AuditLogger
 from aegis.config import Settings
 from aegis.execution import ExecutionService, SimulationService, VerificationService
+from aegis.hermes.runtime import HermesAgent
 from aegis.keeperhub.client import KeeperHubClient
 from aegis.policy import PolicyEngine
 from aegis.recovery import RecoveryRunResult, RunState, run_with_recovery
@@ -79,7 +80,12 @@ DEFAULT_MAX_ROUNDS = 3
 class PipelineComponents:
     """Everything run_pipeline needs, wired from a real (or test-supplied)
     KeeperHubClient. Construct via build_pipeline_components — this
-    dataclass just holds the assembled pieces."""
+    dataclass just holds the assembled pieces.
+
+    hermes_agent is optional and None by default: when absent, candidate
+    generation is exactly what it always was (deterministic only) — see
+    aegis.recovery._consult_hermes and aegis.decision_engine.
+    build_hermes_candidate for what changes when it's supplied."""
 
     keeperhub_client: KeeperHubClient
     position_reader: AavePositionReader
@@ -88,16 +94,24 @@ class PipelineComponents:
     execution_service: ExecutionService
     verification_service: VerificationService
     owns_client: bool = True
+    hermes_agent: HermesAgent | None = None
 
 
 def build_pipeline_components(
-    settings: Settings, *, client: KeeperHubClient | None = None
+    settings: Settings, *, client: KeeperHubClient | None = None, hermes_agent: HermesAgent | None = None
 ) -> PipelineComponents:
     """The composition root. KeeperHub is the only onchain execution
     layer this ever talks to — every service below is a thin wrapper over
     the same single KeeperHubClient, and none of them can construct, sign,
     or broadcast a transaction on their own (see aegis.keeperhub.client's
-    and aegis.execution's own docstrings)."""
+    and aegis.execution's own docstrings).
+
+    hermes_agent is never constructed here — it needs the optional
+    `hermes` extra (anthropic + a live MCP session), which this module
+    must not require just to run the deterministic pipeline. A caller
+    that wants Hermes consulted (e.g. aegis.demo_orchestrator) builds one
+    itself and passes it in; None (the default) is the unchanged,
+    deterministic-only behavior."""
     owns_client = client is None
     keeperhub_client = client or KeeperHubClient(settings)
     return PipelineComponents(
@@ -108,6 +122,7 @@ def build_pipeline_components(
         execution_service=ExecutionService(keeperhub_client),
         verification_service=VerificationService(keeperhub_client),
         owns_client=owns_client,
+        hermes_agent=hermes_agent,
     )
 
 
@@ -221,6 +236,7 @@ def run_pipeline(
                 debt_asset=debt_asset,
                 collateral_asset=collateral_asset,
                 available_balance=available_balance,
+                hermes_agent=components.hermes_agent,
                 run_id=run_id if round_number == 1 else None,
             )
             rounds.append(result)
