@@ -16,11 +16,13 @@ endpoint here that accepts "please execute a real transaction" as input —
 that mode is CLI-only (`aegis live-demo --confirm`, see aegis.cli), gated
 by aegis.preflight and an explicit --confirm flag entered at a terminal by
 whoever is authorizing it. This is a deliberate scope boundary, not an
-oversight: this API's CORS policy is wide open (`allow_origins=["*"]`,
-appropriate for a local hackathon dashboard, not for a real-money-adjacent
-write path), so a POST-to-execute endpoint here would let any page in any
-browser tab trigger a real Base Sepolia transaction through an
-authenticated session. `GET /api/runs/{run_id}` can still show a
+oversight: CORS here is restricted to Settings.aegis_allowed_frontend_origins
+(local dev only by default) precisely because a POST-to-execute endpoint
+would let any page in any allowed origin trigger a real Base Sepolia
+transaction through an authenticated session — even LIVE_DRY_RUN alone
+makes real KeeperHub REST calls against the configured org API key, so
+this allowlist must be set to the real deployed frontend origin(s) before
+any non-local deployment; never '*'. `GET /api/runs/{run_id}` can still show a
 CLI-started LIVE_EXECUTION run's progress and result — it reads the same
 shared audit_log_path aegis.demo_orchestrator.start_run writes to,
 in-process or not — but nothing here can ever start one.
@@ -34,6 +36,7 @@ invariants, tested elsewhere in this project).
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
@@ -48,15 +51,29 @@ from aegis.decision_engine import CandidateAction, build_explanation
 from aegis.demo_orchestrator import DemoMode, DemoOrchestrationError, RunHandle, get_run, start_run
 from aegis.recovery import RecoveryRunResult, RunState
 
+def _cors_allowed_origins() -> list[str]:
+    """Read straight from the environment, not via get_settings() —
+    CORS middleware is configured once at module import time, before any
+    request, and must not require the full Settings() object (which
+    requires a real KEEPERHUB_API_KEY) just to serve /api/health or a
+    FIXTURE-mode run. Local dev only (http://localhost:3000) by default;
+    set AEGIS_ALLOWED_FRONTEND_ORIGINS (comma-separated) to the real
+    deployed frontend origin(s) before any non-local deployment — never
+    '*', since even LIVE_DRY_RUN alone makes real KeeperHub REST calls
+    against the configured org API key."""
+    raw = os.environ.get("AEGIS_ALLOWED_FRONTEND_ORIGINS")
+    if not raw:
+        return ["http://localhost:3000"]
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
 app = FastAPI(title="Aegis Dashboard API", version="2.0.0")
 
-# Local-dev CORS only — the dashboard is a same-org visualization tool,
-# not a public API. Tighten before any real deployment. GET+POST only:
-# every POST this API accepts (/api/runs) can only ever start a FIXTURE or
-# LIVE_DRY_RUN run — see this module's docstring for why LIVE_EXECUTION is
-# excluded structurally, not just by convention.
+# GET+POST only: every POST this API accepts (/api/runs) can only ever
+# start a FIXTURE or LIVE_DRY_RUN run — see this module's docstring for
+# why LIVE_EXECUTION is excluded structurally, not just by convention.
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_methods=["GET", "POST"], allow_headers=["*"],
+    CORSMiddleware, allow_origins=_cors_allowed_origins(), allow_methods=["GET", "POST"], allow_headers=["*"],
 )
 
 

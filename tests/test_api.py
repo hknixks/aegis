@@ -168,3 +168,29 @@ def test_live_dry_run_never_exposes_the_api_key_even_on_error(monkeypatch) -> No
 def test_get_run_unknown_id_is_404() -> None:
     response = client.get("/api/runs/does-not-exist")
     assert response.status_code == 404
+
+
+def test_cors_default_allows_only_local_dev_frontend_never_wildcard() -> None:
+    from aegis.api import _cors_allowed_origins
+
+    assert _cors_allowed_origins() == ["http://localhost:3000"]
+
+
+def test_cors_respects_an_explicit_allowlist(monkeypatch) -> None:
+    from aegis.api import _cors_allowed_origins
+
+    monkeypatch.setenv("AEGIS_ALLOWED_FRONTEND_ORIGINS", "https://aegis.example.com, https://staging.example.com")
+    assert _cors_allowed_origins() == ["https://aegis.example.com", "https://staging.example.com"]
+
+
+def test_cors_middleware_rejects_an_unlisted_origin() -> None:
+    """The app object is already constructed with the default allowlist
+    (http://localhost:3000 only) — an unrelated origin must not get an
+    Access-Control-Allow-Origin echoed back."""
+    response = client.get("/api/health", headers={"Origin": "https://evil.example.com"})
+    assert response.headers.get("access-control-allow-origin") != "https://evil.example.com"
+
+
+def test_cors_middleware_allows_the_default_local_frontend() -> None:
+    response = client.get("/api/health", headers={"Origin": "http://localhost:3000"})
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:3000"

@@ -380,6 +380,7 @@ environment variables. The ones that matter most:
 | `AEGIS_HEALTH_FACTOR_THRESHOLD` | Health factor below which a position is `AT_RISK`. |
 | `AEGIS_AUTONOMOUS_EXECUTION_ENABLED` | Master switch. `false` by default — every run stops after simulation until this is explicitly `true`. |
 | `AEGIS_AUDIT_LOG_PATH` | JSON-lines audit file every run appends to (default `./aegis_runs.jsonl`); shared across processes so the dashboard can poll a CLI-started run. |
+| `AEGIS_ALLOWED_FRONTEND_ORIGINS` | Comma-separated CORS allowlist for `aegis.api`. Defaults to `http://localhost:3000` only. Set to the real deployed frontend origin(s) before any non-local deployment — never `*`. |
 | `ANTHROPIC_API_KEY` | Hermes's real LLM client. Never a KeeperHub or wallet credential. |
 | `AEGIS_HERMES_ENABLED` | Opt-in switch to consult Hermes during LIVE_DRY_RUN/LIVE_EXECUTION. `false` by default. Needs `ANTHROPIC_API_KEY` too. |
 | `NEXT_PUBLIC_AEGIS_API_URL` (frontend) | Plain URL to the Aegis backend. Never a secret. |
@@ -431,6 +432,38 @@ subset (`test_pipeline_live.py`, `test_live_mcp_session.py`) exercises the
 real KeeperHub REST/MCP integration and needs a configured `.env` — not
 part of the default safety net, skipped automatically when credentials
 aren't present.
+
+## Deployment
+
+Nothing exotic — a standard Next.js frontend and a standard FastAPI/uvicorn
+backend. A few things matter before deploying beyond local dev:
+
+- **Backend: one persistent-disk instance, not serverless.**
+  `aegis.audit.AuditLogger` appends every event to `AEGIS_AUDIT_LOG_PATH`
+  with no error handling around the file write — on a read-only or
+  ephemeral filesystem (serverless functions, some container platforms
+  without a mounted volume) this raises uncaught and kills the run on its
+  first audit event. Deploy the backend as one long-lived process with a
+  writable disk (a plain VPS, or a Render/Railway/Fly.io "web service"
+  tier all work). Multiple backend replicas behind a load balancer also
+  break the in-memory run registry and the cross-process file-polling
+  fallback (see [Limitations](#limitations)) unless they share the same
+  disk — stick to one instance.
+- **Set `AEGIS_ALLOWED_FRONTEND_ORIGINS`** to the real deployed frontend
+  origin(s) — it defaults to `http://localhost:3000` only and is never a
+  wildcard, on purpose: `POST /api/runs` (even `live_dry_run`) makes real
+  KeeperHub REST calls against the configured org API key, so leaving
+  this open would let any origin consume your KeeperHub quota.
+- **HTTPS on both sides.** A frontend on HTTPS calling an HTTP backend
+  gets blocked as mixed content by the browser — put the backend behind
+  HTTPS too (most hosts above provide this by default).
+- **Set `KEEPERHUB_API_KEY` (and any other real secrets) as environment
+  variables on the backend host** — never in the frontend's environment;
+  `NEXT_PUBLIC_AEGIS_API_URL` is the only value the frontend needs, and
+  it's a plain URL, not a secret.
+- **`aegis live-demo --confirm` stays CLI-only regardless of deployment.**
+  There is still no HTTP endpoint that can trigger a real transaction —
+  deploying the web app doesn't change that boundary.
 
 ## Limitations
 
